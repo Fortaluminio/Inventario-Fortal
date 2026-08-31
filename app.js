@@ -15,13 +15,18 @@ const sb = window.supabase.createClient(window.SUPABASE_CONFIG.url, window.SUPAB
 let currentProfile = null; // { id, nome, role }
 
 async function ensureAuth() {
-  let { data: { session } } = await sb.auth.getSession();
-  if (!session) {
-    const { data, error } = await sb.auth.signInAnonymously();
-    if (error) { console.error(error); return null; }
-    session = data.session;
+  try {
+    let { data: { session } } = await sb.auth.getSession();
+    if (!session) {
+      const { data, error } = await sb.auth.signInAnonymously();
+      if (error) throw error;
+      session = data.session;
+    }
+    return session;
+  } catch (err) {
+    console.error('Falha no login anônimo:', err);
+    return null;
   }
-  return session;
 }
 
 async function loadProfile(userId) {
@@ -30,11 +35,13 @@ async function loadProfile(userId) {
 }
 
 async function criarProfile(nome, role) {
-  const { data: { session } } = await sb.auth.getSession();
+  let { data: { session } } = await sb.auth.getSession();
+  if (!session) session = await ensureAuth();
+  if (!session) throw new Error('Não foi possível autenticar. Verifique se o "Anonymous Sign-Ins" está ativado no Supabase (Authentication → Sign In / Providers).');
   const { data, error } = await sb.from('profiles')
     .upsert({ id: session.user.id, nome, role })
     .select().single();
-  if (error) { console.error(error); return null; }
+  if (error) throw new Error('Não foi possível salvar o perfil: ' + error.message);
   return data;
 }
 
@@ -285,11 +292,16 @@ function bindLogin() {
     const role = document.getElementById('login-role').value;
     const btn = document.getElementById('btn-entrar');
     btn.disabled = true; btn.textContent = 'ENTRANDO...';
-    currentProfile = await criarProfile(nome, role);
-    if (!currentProfile) { btn.disabled = false; btn.textContent = 'ENTRAR'; return; }
-    await refreshInventories();
-    state.tab = 'inventarios';
-    render();
+    try {
+      currentProfile = await criarProfile(nome, role);
+      await refreshInventories();
+      state.tab = 'inventarios';
+      render();
+    } catch (err) {
+      console.error(err);
+      btn.disabled = false; btn.textContent = 'ENTRAR';
+      showToast(err.message || 'Não foi possível entrar. Tente novamente.', true);
+    }
   };
 }
 
