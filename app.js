@@ -14,11 +14,18 @@ const sb = window.supabase.createClient(window.SUPABASE_CONFIG.url, window.SUPAB
 
 let currentProfile = null; // { id, nome, role }
 
+function withTimeout(promise, ms, message) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => setTimeout(() => reject(new Error(message)), ms)),
+  ]);
+}
+
 async function ensureAuth() {
   try {
-    let { data: { session } } = await sb.auth.getSession();
+    let { data: { session } } = await withTimeout(sb.auth.getSession(), 12000, 'Servidor demorando para responder. Tente novamente.');
     if (!session) {
-      const { data, error } = await sb.auth.signInAnonymously();
+      const { data, error } = await withTimeout(sb.auth.signInAnonymously(), 12000, 'Servidor demorando para responder (login). Tente novamente.');
       if (error) throw error;
       session = data.session;
     }
@@ -35,12 +42,13 @@ async function loadProfile(userId) {
 }
 
 async function criarProfile(nome, role) {
-  let { data: { session } } = await sb.auth.getSession();
+  let { data: { session } } = await withTimeout(sb.auth.getSession(), 12000, 'Servidor demorando para responder. Tente novamente.');
   if (!session) session = await ensureAuth();
-  if (!session) throw new Error('Não foi possível autenticar. Verifique se o "Anonymous Sign-Ins" está ativado no Supabase (Authentication → Sign In / Providers).');
-  const { data, error } = await sb.from('profiles')
-    .upsert({ id: session.user.id, nome, role })
-    .select().single();
+  if (!session) throw new Error('Não foi possível autenticar (servidor lento ou "Anonymous Sign-Ins" desativado). Tente novamente em instantes.');
+  const { data, error } = await withTimeout(
+    sb.from('profiles').upsert({ id: session.user.id, nome, role }).select().single(),
+    12000, 'Servidor demorando para salvar o perfil. Tente novamente.'
+  );
   if (error) throw new Error('Não foi possível salvar o perfil: ' + error.message);
   return data;
 }
