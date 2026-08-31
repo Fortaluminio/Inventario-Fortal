@@ -183,12 +183,14 @@ label { font-size: 13px; color: var(--texto-suave); display: block; margin-botto
 
 .produto-encontrado {
   display: flex;
-  gap: 14px;
+  flex-direction: column;
   align-items: center;
+  text-align: center;
+  gap: 10px;
 }
 .produto-encontrado img, .produto-encontrado .no-photo {
-  width: 74px; height: 74px;
-  border-radius: 12px;
+  width: 180px; height: 180px;
+  border-radius: 16px;
   object-fit: contain;
   background: var(--azul-claro);
   border: 1px solid var(--borda);
@@ -196,7 +198,7 @@ label { font-size: 13px; color: var(--texto-suave); display: block; margin-botto
 }
 .produto-encontrado .no-photo {
   display: flex; align-items: center; justify-content: center;
-  color: var(--texto-suave); font-size: 10px; text-align: center; padding: 4px;
+  color: var(--texto-suave); font-size: 12px; text-align: center; padding: 4px;
 }
 .qtd-control { display: flex; align-items: center; gap: 14px; justify-content: center; margin: 18px 0; }
 .qtd-control button {

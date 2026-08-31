@@ -100,6 +100,7 @@ async function refreshInventories() {
     })),
     entries: (entries || []).filter(e => e.inventory_id === inv.id).map(e => ({
       id: e.id, codigo: e.codigo, round: e.round, quantity: +e.quantity,
+      arvore: e.arvore, lado: e.lado,
       userName: e.user_nome, deviceId: e.device_id, timestamp: e.created_at,
     })),
     corrections: (corrections || []).filter(c => c.inventory_id === inv.id).map(c => ({
@@ -130,9 +131,9 @@ async function criarInventarioSupabase(numero, produtos) {
   await refreshInventories();
 }
 
-async function registrarLancamentoSupabase(inventoryId, codigo, round, quantity) {
+async function registrarLancamentoSupabase(inventoryId, codigo, round, quantity, arvore, lado) {
   const { error } = await sb.from('count_entries').insert({
-    inventory_id: inventoryId, codigo, round, quantity,
+    inventory_id: inventoryId, codigo, round, quantity, arvore: arvore || null, lado: lado || null,
     user_id: currentProfile.id, user_nome: currentProfile.nome, device_id: deviceId(),
   });
   if (error) { showToast('Erro ao registrar: ' + error.message, true); return false; }
@@ -214,6 +215,32 @@ function divergentProducts(inv) {
   return inv.products.filter(p => productStatus(inv, p.codigo).divergente);
 }
 
+/* ---------------- LEITURA DO PDF (WinThor rotina 1147) ---------------- */
+
+pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://unpkg.com/pdfjs-dist@3.11.174/build/pdf.worker.min.js';
+
+async function extractTextFromPdf(file) {
+  const buf = await file.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
+  let fullText = '';
+  for (let i = 1; i <= pdf.numPages; i++) {
+    const page = await pdf.getPage(i);
+    const content = await page.getTextContent();
+    let lastY = null, line = '';
+    for (const item of content.items) {
+      const y = item.transform[5];
+      if (lastY !== null && Math.abs(y - lastY) > 2) {
+        fullText += line + '\n';
+        line = '';
+      }
+      line += (line ? ' ' : '') + item.str;
+      lastY = y;
+    }
+    fullText += line + '\n';
+  }
+  return fullText;
+}
+
 /* ---------------- PARSER DO RELATÓRIO WINTHOR (rotina 1147) ---------------- */
 
 function parseWinthorReport(texto) {
@@ -245,6 +272,8 @@ const state = {
   currentRound: 1,
   produtoEncontrado: null,
   qtd: 1,
+  arvore: '',
+  lado: '',
   gerenciarTab: 'resumo',
   novoInventarioTexto: '',
   novoInventarioPreview: null,
@@ -262,8 +291,9 @@ function render() {
   let body = '';
   if (state.tab === 'inventarios') body = viewInventarios();
   else if (state.tab === 'inventariar') body = viewInventariar();
-  else if (state.tab === 'relatorios') body = viewRelatorios();
+  else if (state.tab === 'relatorios' && currentProfile.role === 'gerenciar') body = viewRelatorios();
   else if (state.tab === 'perfil') body = viewPerfil();
+  else body = viewInventarios();
 
   app.innerHTML = body;
   bindGlobal();
@@ -318,7 +348,7 @@ function tabbar() {
   const tabs = [
     { id: 'inventarios', ic: '📋', label: 'Inventários' },
     { id: 'inventariar', ic: '📷', label: 'Inventariar' },
-    { id: 'relatorios', ic: '📊', label: 'Relatórios' },
+    ...(currentProfile.role === 'gerenciar' ? [{ id: 'relatorios', ic: '📊', label: 'Relatórios' }] : []),
     { id: 'perfil', ic: '👤', label: 'Perfil' },
   ];
   return `<div class="tabbar">${tabs.map(t => `
@@ -367,10 +397,15 @@ function modalNovoInventario() {
     <div style="background:var(--fundo);width:100%;max-height:88vh;overflow:auto;border-radius:20px 20px 0 0;padding:20px;">
       <h3 style="margin-top:0;">Novo inventário</h3>
       <div class="field">
-        <label>Cole aqui o texto do relatório da rotina 1147 (WinThor)</label>
-        <textarea id="txt-winthor" rows="6" style="width:100%;padding:12px;border-radius:10px;border:1.5px solid var(--borda);font-family:monospace;font-size:12px;">${state.novoInventarioTexto}</textarea>
+        <label>Selecione o arquivo PDF do relatório da rotina 1147 (WinThor)</label>
+        <input type="file" id="file-winthor" accept="application/pdf" />
       </div>
-      <button class="btn btn-outline" id="btn-processar" style="margin-bottom:12px;">PROCESSAR PDF</button>
+      <div style="text-align:center;color:var(--texto-suave);font-size:12px;margin:10px 0;">— ou —</div>
+      <div class="field">
+        <label>Cole aqui o texto do relatório</label>
+        <textarea id="txt-winthor" rows="5" style="width:100%;padding:12px;border-radius:10px;border:1.5px solid var(--borda);font-family:monospace;font-size:12px;">${state.novoInventarioTexto}</textarea>
+      </div>
+      <button class="btn btn-outline" id="btn-processar" style="margin-bottom:12px;">PROCESSAR TEXTO COLADO</button>
       ${preview ? `
         <div class="card">
           <h3>Inventário nº ${preview.numeroInventario || '(não identificado)'}</h3>
@@ -451,11 +486,19 @@ function modalCorrecao(inv) {
   if (!state._corrigirCodigo) return '';
   const p = inv.products.find(p => p.codigo === state._corrigirCodigo);
   const s = productStatus(inv, p.codigo);
+  const lancamentos = inv.entries.filter(e => e.codigo === p.codigo).sort((a, b) => a.round - b.round);
   return `
   <div style="position:fixed;inset:0;background:rgba(11,37,69,0.55);z-index:40;display:flex;align-items:center;justify-content:center;">
-    <div class="card" style="width:88%;max-width:380px;">
+    <div class="card" style="width:88%;max-width:380px;max-height:85vh;overflow:auto;">
       <h3>Corrigir — ${p.referencia}</h3>
       <div class="meta" style="margin-bottom:14px;">Total atual: <b>${s.final ?? s.t1 ?? 0}</b></div>
+      ${lancamentos.length ? `
+        <div class="meta" style="font-weight:600;margin-bottom:6px;">Onde foi contado</div>
+        <table class="report" style="margin-bottom:16px;">
+          <tr><th>Cont.</th><th>Qtd</th><th>Árvore</th><th>Lado</th><th>Quem</th></tr>
+          ${lancamentos.map(e => `<tr><td>${e.round}ª</td><td>${e.quantity}</td><td>${e.arvore || '-'}</td><td>${e.lado || '-'}</td><td>${e.userName || '-'}</td></tr>`).join('')}
+        </table>
+      ` : ''}
       <div class="field"><label>Novo total</label><input id="corr-novo-total" type="number" value="${s.final ?? s.t1 ?? 0}" /></div>
       <div class="field"><label>Motivo da correção</label><input id="corr-motivo" placeholder="Ex: erro de digitação" /></div>
       <button class="btn btn-primary" id="btn-salvar-correcao">SALVAR CORREÇÃO</button>
@@ -508,6 +551,10 @@ function viewInventariar() {
       </div>
       <div class="qtd-control">
         <button id="qtd-menos">−</button><input id="qtd-input" type="number" value="${state.qtd}" /><button id="qtd-mais">+</button>
+      </div>
+      <div style="display:flex;gap:10px;">
+        <div class="field" style="flex:1;"><label>Árvore</label><input id="input-arvore" placeholder="Ex: 1" value="${state.arvore}" /></div>
+        <div class="field" style="flex:1;"><label>Lado</label><input id="input-lado" placeholder="Ex: B" value="${state.lado}" /></div>
       </div>
       <button class="btn btn-success" id="btn-registrar">REGISTRAR</button>
       <button class="btn btn-ghost" id="btn-cancelar-produto">CANCELAR</button>
@@ -570,6 +617,21 @@ function bindGlobal() {
     state.novoInventarioTexto = texto;
     state.novoInventarioPreview = parseWinthorReport(texto);
     render();
+  };
+  const fileWinthor = document.getElementById('file-winthor');
+  if (fileWinthor) fileWinthor.onchange = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    showToast('Lendo PDF...');
+    try {
+      const texto = await extractTextFromPdf(file);
+      state.novoInventarioTexto = texto;
+      state.novoInventarioPreview = parseWinthorReport(texto);
+      render();
+    } catch (err) {
+      console.error(err);
+      showToast('Não foi possível ler esse PDF. Tente colar o texto manualmente.', true);
+    }
   };
   const btnConfirmarInv = document.getElementById('btn-confirmar-inv');
   if (btnConfirmarInv) btnConfirmarInv.onclick = async () => {
@@ -641,7 +703,7 @@ function bindGlobal() {
   document.getElementById('qtd-menos')?.addEventListener('click', () => { state.qtd = Math.max(1, state.qtd - 1); render(); });
   document.getElementById('qtd-mais')?.addEventListener('click', () => { state.qtd = state.qtd + 1; render(); });
   document.getElementById('qtd-input')?.addEventListener('change', e => { state.qtd = Math.max(1, +e.target.value || 1); });
-  document.getElementById('btn-cancelar-produto')?.addEventListener('click', () => { state.produtoEncontrado = null; state.qtd = 1; render(); });
+  document.getElementById('btn-cancelar-produto')?.addEventListener('click', () => { state.produtoEncontrado = null; state.qtd = 1; state.arvore = ''; state.lado = ''; render(); });
   document.getElementById('btn-registrar')?.addEventListener('click', registrarLancamento);
 }
 
@@ -662,9 +724,11 @@ async function registrarLancamento() {
   const inv = currentInventory();
   const p = state.produtoEncontrado;
   if (!inv || !p) return;
-  const ok = await registrarLancamentoSupabase(inv.id, p.codigo, state.currentRound, state.qtd);
+  const arvore = document.getElementById('input-arvore')?.value.trim() || '';
+  const lado = document.getElementById('input-lado')?.value.trim() || '';
+  const ok = await registrarLancamentoSupabase(inv.id, p.codigo, state.currentRound, state.qtd, arvore, lado);
   if (!ok) return;
-  state.produtoEncontrado = null; state.qtd = 1; render();
+  state.produtoEncontrado = null; state.qtd = 1; state.arvore = ''; state.lado = ''; render();
   showToast('Lançamento registrado com sucesso.');
   setTimeout(() => document.getElementById('input-codigo')?.focus(), 50);
 }
@@ -701,10 +765,10 @@ function downloadCsv(filename, rows) {
 
 function exportLancamentosCsv(inv) {
   if (!inv) return;
-  const rows = [['CODPROD','DESCRICAO','QUANTIDADE','NUMINVENTARIO','CONTAGEM']];
+  const rows = [['CODPROD','DESCRICAO','QUANTIDADE','NUMINVENTARIO','CONTAGEM','ARVORE','LADO']];
   inv.entries.forEach(e => {
     const p = inv.products.find(p => p.codigo === e.codigo);
-    rows.push([e.codigo, p?.descricao || '', e.quantity, inv.numero, e.round]);
+    rows.push([e.codigo, p?.descricao || '', e.quantity, inv.numero, e.round, e.arvore || '', e.lado || '']);
   });
   downloadCsv(`inventario_${inv.numero}_lancamentos.csv`, rows);
 }

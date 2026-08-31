@@ -51,6 +51,8 @@ create table if not exists count_entries (
   codigo text not null,
   round int not null check (round in (1,2,3)),
   quantity numeric not null check (quantity > 0),
+  arvore text,
+  lado text,
   user_id uuid references profiles(id),
   user_nome text,
   device_id text,
