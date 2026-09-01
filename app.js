@@ -72,6 +72,29 @@ function deviceId() {
   return d;
 }
 
+function getLastLocation() {
+  return JSON.parse(localStorage.getItem('if_last_location') || '{"arvore":"","lado":""}');
+}
+function saveLastLocation(arvore, lado) {
+  localStorage.setItem('if_last_location', JSON.stringify({ arvore, lado }));
+}
+
+function getLastQtyConfig() {
+  return JSON.parse(localStorage.getItem('if_qty_config') || '{"modo":"simples"}');
+}
+function saveLastQtyConfig(modo) {
+  localStorage.setItem('if_qty_config', JSON.stringify({ modo }));
+}
+function linhaVazia() { return { qtd: '', pecas: '' }; }
+function calcularTotalVolumes() {
+  return (state.volumeLinhas || []).reduce((soma, linha) => {
+    const qtd = parseFloat(String(linha.qtd).replace(',', '.')) || 0;
+    const temPecas = linha.pecas !== '' && linha.pecas != null;
+    const pecas = temPecas ? (parseFloat(String(linha.pecas).replace(',', '.')) || 0) : null;
+    return soma + (pecas !== null ? qtd * pecas : qtd);
+  }, 0);
+}
+
 /* ---------------- CAMADA DE DADOS (Supabase) ---------------- */
 
 let inventoriesCache = [];
@@ -101,10 +124,12 @@ async function refreshInventories() {
     entries: (entries || []).filter(e => e.inventory_id === inv.id).map(e => ({
       id: e.id, codigo: e.codigo, round: e.round, quantity: +e.quantity,
       arvore: e.arvore, lado: e.lado,
+      detalheContagem: e.detalhe_contagem || null,
+      qtdAvaria: e.qtd_avaria == null ? null : +e.qtd_avaria,
       userName: e.user_nome, deviceId: e.device_id, timestamp: e.created_at,
     })),
     corrections: (corrections || []).filter(c => c.inventory_id === inv.id).map(c => ({
-      id: c.id, codigo: c.codigo, oldTotal: c.old_total == null ? null : +c.old_total,
+      id: c.id, codigo: c.codigo, round: c.round, oldTotal: c.old_total == null ? null : +c.old_total,
       newTotal: +c.new_total, reason: c.reason, userName: c.user_nome, timestamp: c.created_at,
     })),
   }));
@@ -131,9 +156,10 @@ async function criarInventarioSupabase(numero, produtos) {
   await refreshInventories();
 }
 
-async function registrarLancamentoSupabase(inventoryId, codigo, round, quantity, arvore, lado) {
+async function registrarLancamentoSupabase(inventoryId, codigo, round, quantity, arvore, lado, detalheContagem, qtdAvaria) {
   const { error } = await sb.from('count_entries').insert({
     inventory_id: inventoryId, codigo, round, quantity, arvore: arvore || null, lado: lado || null,
+    detalhe_contagem: detalheContagem, qtd_avaria: qtdAvaria,
     user_id: currentProfile.id, user_nome: currentProfile.nome, device_id: deviceId(),
   });
   if (error) { showToast('Erro ao registrar: ' + error.message, true); return false; }
@@ -141,9 +167,9 @@ async function registrarLancamentoSupabase(inventoryId, codigo, round, quantity,
   return true;
 }
 
-async function salvarCorrecaoSupabase(inventoryId, codigo, oldTotal, newTotal, reason) {
+async function salvarCorrecaoSupabase(inventoryId, codigo, round, oldTotal, newTotal, reason) {
   const { error } = await sb.from('corrections').insert({
-    inventory_id: inventoryId, codigo, old_total: oldTotal, new_total: newTotal,
+    inventory_id: inventoryId, codigo, round, old_total: oldTotal, new_total: newTotal,
     reason, user_id: currentProfile.id, user_nome: currentProfile.nome,
   });
   if (error) { showToast('Erro ao salvar correção: ' + error.message, true); return; }
@@ -167,18 +193,33 @@ function assinarTempoReal() {
 
 /* ---------------- REGRAS DE NEGÓCIO ---------------- */
 
+function formatarDetalhe(detalhe) {
+  if (!detalhe || !detalhe.length) return '-';
+  return detalhe.map(l => l.pecas != null ? `${l.qtd}×${l.pecas}` : `${l.qtd}`).join(' + ');
+}
+
 function roundTotal(inv, codigo, round) {
   return inv.entries.filter(e => e.codigo === codigo && e.round === round).reduce((s, e) => s + e.quantity, 0);
 }
 
+function effectiveRoundTotal(inv, codigo, round) {
+  const raw = roundTotal(inv, codigo, round);
+  const corr = [...inv.corrections].reverse().find(c => c.codigo === codigo && c.round === round);
+  return corr ? corr.newTotal : raw;
+}
+
+function roundHasData(inv, codigo, round) {
+  return inv.entries.some(e => e.codigo === codigo && e.round === round) ||
+         inv.corrections.some(c => c.codigo === codigo && c.round === round);
+}
+
 function productStatus(inv, codigo) {
-  const t1 = roundTotal(inv, codigo, 1);
-  const t2 = roundTotal(inv, codigo, 2);
-  const t3 = roundTotal(inv, codigo, 3);
-  const c1 = inv.entries.some(e => e.codigo === codigo && e.round === 1);
-  const c2 = inv.entries.some(e => e.codigo === codigo && e.round === 2);
-  const c3 = inv.entries.some(e => e.codigo === codigo && e.round === 3);
-  const correction = [...inv.corrections].reverse().find(c => c.codigo === codigo);
+  const t1 = effectiveRoundTotal(inv, codigo, 1);
+  const t2 = effectiveRoundTotal(inv, codigo, 2);
+  const t3 = effectiveRoundTotal(inv, codigo, 3);
+  const c1 = roundHasData(inv, codigo, 1);
+  const c2 = roundHasData(inv, codigo, 2);
+  const c3 = roundHasData(inv, codigo, 3);
 
   let status = 'AGUARDANDO 1ª';
   let final = null;
@@ -198,8 +239,6 @@ function productStatus(inv, codigo) {
   } else {
     status = 'FINALIZADO'; final = t3;
   }
-
-  if (correction) final = correction.newTotal;
 
   return { t1, t2, t3, final, status, divergente: c1 && c2 && inv.roundClosed[2] && t1 !== t2 };
 }
@@ -272,6 +311,10 @@ const state = {
   currentRound: 1,
   produtoEncontrado: null,
   qtd: 1,
+  qtdModo: 'simples',
+  qtdAvaria: '',
+  volumeLinhas: [],
+  _volumesExpandida: true,
   arvore: '',
   lado: '',
   gerenciarTab: 'resumo',
@@ -282,6 +325,10 @@ const state = {
 function currentInventory() { return inventoriesCache.find(i => i.id === state.currentInventoryId) || null; }
 
 /* ---------------- RENDER ---------------- */
+
+function brandIcon() {
+  return `<img src="assets/brand/icone-f-branco-transp.png" class="brand-ic" />`;
+}
 
 const app = document.getElementById('app');
 
@@ -302,13 +349,14 @@ function render() {
 /* ---- LOGIN ---- */
 function viewLogin() {
   return `
-  <div style="display:flex;flex-direction:column;justify-content:center;min-height:100vh;padding:32px;background:var(--azul-escuro);">
-    <div style="text-align:center;color:#fff;margin-bottom:36px;">
-      <div style="font-size:34px;">🧱</div>
-      <h1 style="font-size:22px;margin:10px 0 2px;">INVENTÁRIO<br/>FORTAL ALUMÍNIO</h1>
+  <div style="display:flex;flex-direction:column;justify-content:center;min-height:100vh;padding:32px;background:var(--azul-escuro);position:relative;overflow:hidden;">
+    <img src="assets/brand/marca-dagua-f.png" style="position:absolute;top:-60px;right:-90px;width:320px;opacity:0.07;pointer-events:none;" />
+    <img src="assets/brand/marca-dagua-f.png" style="position:absolute;bottom:-100px;left:-110px;width:280px;opacity:0.05;pointer-events:none;transform:scaleX(-1);" />
+    <div style="text-align:center;margin-bottom:36px;position:relative;">
+      <img src="assets/brand/lockup-login-transp.png" alt="Fortal Alumínio" style="width:100%;max-width:290px;margin:0 auto 10px;display:block;" />
       <div style="color:#AFC3E0;font-size:13px;">Controle de estoque</div>
     </div>
-    <div class="card">
+    <div class="card" style="position:relative;z-index:1;">
       <div class="field"><label>Seu nome</label><input id="login-nome" placeholder="Ex: João Silva" /></div>
       <div class="field">
         <label>Perfil</label>
@@ -365,7 +413,7 @@ function viewInventarios() {
   const showList = inventoriesCache.filter(i => filterTab === 'andamento' ? i.status === 'em_andamento' : i.status === 'finalizado');
 
   return `
-  <div class="topbar"><div><h1>Inventários</h1><div class="sub">${currentProfile.nome} · ${currentProfile.role === 'gerenciar' ? 'Gerenciar' : 'Inventariar'}</div></div></div>
+  <div class="topbar"><div class="titles">${brandIcon()}<div><h1>Inventários</h1><div class="sub">${currentProfile.nome} · ${currentProfile.role === 'gerenciar' ? 'Gerenciar' : 'Inventariar'}</div></div></div></div>
   <div class="content">
     <div class="tabs-inline">
       <button data-invfilter="andamento" class="${filterTab==='andamento'?'active':''}">EM ANDAMENTO</button>
@@ -431,11 +479,17 @@ function viewGerenciarInventario(inv) {
 
   let body = '';
   if (state.gerenciarTab === 'resumo') {
+    const pctGeral = Math.round(finalizados/inv.products.length*100) || 0;
     body = `
+    <div class="card" style="text-align:center;background:var(--azul-escuro);border:none;position:relative;overflow:hidden;">
+      <img src="assets/brand/marca-dagua-f.png" style="position:absolute;top:-20px;right:-30px;width:110px;opacity:0.08;pointer-events:none;" />
+      <div style="color:#AFC3E0;font-size:12px;font-weight:600;letter-spacing:0.03em;position:relative;">BALANÇO CONCLUÍDO</div>
+      <div style="color:var(--lima);font-size:44px;font-weight:800;line-height:1.1;position:relative;">${pctGeral}%</div>
+      <div style="color:#AFC3E0;font-size:12px;position:relative;">${finalizados} de ${inv.products.length} produtos finalizados</div>
+    </div>
     <div class="progress-row"><div class="label-row"><span>1ª CONTAGEM</span><span>${p1}%</span></div><div class="progress-bar-bg"><div class="progress-bar-fill" style="width:${p1}%"></div></div></div>
     <div class="progress-row"><div class="label-row"><span>2ª CONTAGEM</span><span>${p2}%</span></div><div class="progress-bar-bg"><div class="progress-bar-fill" style="width:${p2}%"></div></div></div>
     <div class="progress-row"><div class="label-row"><span>3ª CONTAGEM${div.length?` (${div.length} produtos)`:''}</span><span>${p3}%</span></div><div class="progress-bar-bg"><div class="progress-bar-fill" style="width:${p3}%"></div></div></div>
-    <div class="progress-row"><div class="label-row"><span>FINALIZADO</span><span>${Math.round(finalizados/inv.products.length*100)||0}%</span></div><div class="progress-bar-bg"><div class="progress-bar-fill" style="width:${Math.round(finalizados/inv.products.length*100)||0}%;background:var(--verde);"></div></div></div>
     ${div.length ? `<div class="card"><h3>⚠️ Divergências</h3><div class="meta">${div.length} produto(s) aguardando 3ª contagem</div></div>` : ''}
     <div class="card">
       <h3>Controle de etapas</h3>
@@ -450,22 +504,39 @@ function viewGerenciarInventario(inv) {
     </div>
     <button class="btn btn-ghost" id="btn-export-csv">EXCEL DOS LANÇAMENTOS ATUAIS (CSV)</button>`;
   } else if (state.gerenciarTab === 'produtos') {
-    body = `<table class="report"><tr><th>Cód</th><th>Ref</th><th>1ª</th><th>2ª</th><th>3ª</th><th>Final</th><th>Status</th></tr>
+    body = `<table class="report"><tr><th>Cód</th><th>Ref</th><th>1ª</th><th>2ª</th><th>3ª</th><th>Final</th><th>Avaria</th><th>Status</th></tr>
       ${inv.products.map(p => {
         const s = productStatus(inv, p.codigo);
-        return `<tr data-corrigir="${p.codigo}"><td>${p.codigo}</td><td>${p.referencia}</td><td>${s.t1||'-'}</td><td>${s.t2||'-'}</td><td>${s.t3||'-'}</td><td><b>${s.final ?? '-'}</b></td><td>${statusBadge(s.status)}</td></tr>`;
+        const avaria = inv.entries.filter(e => e.codigo === p.codigo).reduce((soma, e) => soma + (e.qtdAvaria || 0), 0);
+        return `<tr data-corrigir="${p.codigo}"><td>${p.codigo}</td><td>${p.referencia}</td><td>${s.t1||'-'}</td><td>${s.t2||'-'}</td><td>${s.t3||'-'}</td><td><b>${s.final ?? '-'}</b></td><td>${avaria ? `<span style="color:var(--laranja);font-weight:700;">${avaria}</span>` : '-'}</td><td>${statusBadge(s.status)}</td></tr>`;
       }).join('')}</table>`;
   } else if (state.gerenciarTab === 'equipe') {
+    const totalLancamentos = inv.entries.length;
     const porUsuario = {};
-    inv.entries.forEach(e => { porUsuario[e.userName] = (porUsuario[e.userName]||0) + 1; });
-    body = Object.keys(porUsuario).length === 0 ? emptyState('👥','Nenhum lançamento ainda') :
-      Object.entries(porUsuario).map(([nome, qtd]) => `<div class="card"><h3>${nome}</h3><div class="meta">${qtd} lançamento(s)</div></div>`).join('');
+    inv.entries.forEach(e => {
+      if (!porUsuario[e.userName]) porUsuario[e.userName] = { lancamentos: 0, produtos: new Set() };
+      porUsuario[e.userName].lancamentos += 1;
+      porUsuario[e.userName].produtos.add(e.codigo);
+    });
+    const linhas = Object.entries(porUsuario).sort((a, b) => b[1].lancamentos - a[1].lancamentos);
+    body = linhas.length === 0 ? emptyState('👥','Nenhum lançamento ainda') : `
+      <div class="meta" style="margin-bottom:10px;">${totalLancamentos} lançamentos no total, de ${linhas.length} pessoa(s)</div>
+      ${linhas.map(([nome, d]) => {
+        const pctColab = totalLancamentos ? Math.round((d.lancamentos / totalLancamentos) * 100) : 0;
+        return `<div class="card">
+          <div style="display:flex;justify-content:space-between;align-items:start;">
+            <h3>${nome}</h3><span class="badge badge-andamento">${pctColab}% do total</span>
+          </div>
+          <div class="meta">${d.produtos.size} produto(s) contado(s) · ${d.lancamentos} lançamento(s)</div>
+          <div class="progress-bar-bg" style="margin-top:8px;"><div class="progress-bar-fill" style="width:${pctColab}%"></div></div>
+        </div>`;
+      }).join('')}`;
   }
 
   return `
   <div class="topbar">
     <button class="icon-btn" id="btn-voltar-inv">←</button>
-    <div><h1>Inventário ${inv.numero}</h1><div class="sub">${inv.products.length} produtos</div></div>
+    <div class="titles">${brandIcon()}<div><h1>Inventário ${inv.numero}</h1><div class="sub">${inv.products.length} produtos</div></div></div>
     <div style="width:36px;"></div>
   </div>
   <div class="content">
@@ -487,19 +558,27 @@ function modalCorrecao(inv) {
   const p = inv.products.find(p => p.codigo === state._corrigirCodigo);
   const s = productStatus(inv, p.codigo);
   const lancamentos = inv.entries.filter(e => e.codigo === p.codigo).sort((a, b) => a.round - b.round);
+  const round = state._corrigirRound || 1;
+  const totalAtualRound = effectiveRoundTotal(inv, p.codigo, round);
   return `
   <div style="position:fixed;inset:0;background:rgba(11,37,69,0.55);z-index:40;display:flex;align-items:center;justify-content:center;">
     <div class="card" style="width:88%;max-width:380px;max-height:85vh;overflow:auto;">
       <h3>Corrigir — ${p.referencia}</h3>
-      <div class="meta" style="margin-bottom:14px;">Total atual: <b>${s.final ?? s.t1 ?? 0}</b></div>
+      <div class="meta" style="margin-bottom:14px;">1ª: <b>${s.t1}</b> · 2ª: <b>${s.t2}</b> · 3ª: <b>${s.t3}</b> · Final: <b>${s.final ?? '-'}</b></div>
       ${lancamentos.length ? `
         <div class="meta" style="font-weight:600;margin-bottom:6px;">Onde foi contado</div>
         <table class="report" style="margin-bottom:16px;">
-          <tr><th>Cont.</th><th>Qtd</th><th>Árvore</th><th>Lado</th><th>Quem</th></tr>
-          ${lancamentos.map(e => `<tr><td>${e.round}ª</td><td>${e.quantity}</td><td>${e.arvore || '-'}</td><td>${e.lado || '-'}</td><td>${e.userName || '-'}</td></tr>`).join('')}
+          <tr><th>Cont.</th><th>Qtd</th><th>Como</th><th>Avaria</th><th>Árvore</th><th>Lado</th><th>Quem</th></tr>
+          ${lancamentos.map(e => `<tr><td>${e.round}ª</td><td>${e.quantity}</td><td>${formatarDetalhe(e.detalheContagem)}</td><td>${e.qtdAvaria || '-'}</td><td>${e.arvore || '-'}</td><td>${e.lado || '-'}</td><td>${e.userName || '-'}</td></tr>`).join('')}
         </table>
       ` : ''}
-      <div class="field"><label>Novo total</label><input id="corr-novo-total" type="number" value="${s.final ?? s.t1 ?? 0}" /></div>
+      <div class="field">
+        <label>Qual contagem corrigir?</label>
+        <div class="tabs-inline" style="margin-bottom:0;">
+          ${[1,2,3].map(r => `<button data-corr-round="${r}" class="${round===r?'active':''}">${r}ª CONTAGEM</button>`).join('')}
+        </div>
+      </div>
+      <div class="field"><label>Novo total da ${round}ª contagem</label><input id="corr-novo-total" type="number" value="${totalAtualRound}" /></div>
       <div class="field"><label>Motivo da correção</label><input id="corr-motivo" placeholder="Ex: erro de digitação" /></div>
       <button class="btn btn-primary" id="btn-salvar-correcao">SALVAR CORREÇÃO</button>
       <button class="btn btn-ghost" id="btn-fechar-correcao">CANCELAR</button>
@@ -513,7 +592,7 @@ function viewInventariar() {
 
   if (!state.currentInventoryId) {
     return `
-    <div class="topbar"><h1>Inventariar</h1></div>
+    <div class="topbar"><div class="titles">${brandIcon()}<h1>Inventariar</h1></div></div>
     <div class="content">
       <p class="meta" style="margin-bottom:10px;">Selecione o inventário:</p>
       ${inventarios.length === 0 ? emptyState('📦','Nenhum inventário em andamento') :
@@ -530,7 +609,7 @@ function viewInventariar() {
   return `
   <div class="topbar">
     <button class="icon-btn" id="btn-sair-contagem">←</button>
-    <div><h1>INVENTARIAR – INV. ${inv.numero}</h1><div class="sub">${currentProfile.nome}</div></div>
+    <div class="titles">${brandIcon()}<div><h1>INVENTARIAR – INV. ${inv.numero}</h1><div class="sub">${currentProfile.nome}</div></div></div>
     <div style="width:36px;"></div>
   </div>
   <div class="content">
@@ -543,21 +622,75 @@ function viewInventariar() {
       <div class="field"><label>CÓDIGO OU CÓDIGO DE BARRAS</label><input id="input-codigo" placeholder="Ex: 3 ou 200000000003" autofocus /></div>
       <button class="btn btn-primary" id="btn-buscar-produto">BUSCAR</button>
     ` : `
-      <div class="card">
-        <div class="produto-encontrado">
-          ${p.temFoto ? `<img src="assets/products/${p.codigo}.png" />` : `<div class="no-photo">SEM FOTO</div>`}
-          <div><div class="meta">${p.codigo} — ${p.referencia}</div><h3>${p.descricao}</h3></div>
+      <div style="padding-bottom:96px;">
+        <div class="produto-encontrado-wrap">
+          <div class="validado-badge"><span class="check">✓</span><span class="txt">Produto encontrado — confira antes de registrar</span></div>
+          <div class="produto-encontrado" style="padding:0 8px 14px;">
+            ${p.temFoto ? `<img src="assets/products/${p.codigo}.png" style="width:190px;height:190px;" />` : `<div class="no-photo" style="width:190px;height:190px;">SEM FOTO</div>`}
+            <div style="display:flex;align-items:baseline;justify-content:center;gap:8px;">
+              <span class="cod-pill">CÓD. ${p.codigo}</span><span style="font-size:19px;color:var(--azul-escuro);font-weight:800;">${p.referencia}</span>
+            </div>
+            <h3 style="margin-top:6px;">${p.descricao}</h3>
+          </div>
+        </div>
+        <div class="tabs-inline">
+          <button data-qtdmodo="simples" class="${state.qtdModo==='simples'?'active':''}">QTD. SIMPLES</button>
+          <button data-qtdmodo="volumes" class="${state.qtdModo==='volumes'?'active':''}">POR VOLUMES</button>
+        </div>
+        ${state.qtdModo === 'simples' ? `
+          <div class="qtd-control">
+            <button id="qtd-menos">−</button><input id="qtd-input" type="number" value="${state.qtd}" /><button id="qtd-mais">+</button>
+          </div>
+        ` : state._volumesExpandida ? `
+          <div class="card" style="margin-bottom:12px;">
+            <div class="meta" style="margin-bottom:10px;">Uma linha por combinação — deixe "Unidade" em branco quando for só peça solta.</div>
+            <div style="display:flex;gap:8px;margin-bottom:4px;">
+              <div style="flex:1;font-size:11px;color:var(--texto-suave);font-weight:600;">VOLUME</div>
+              <div style="width:14px;"></div>
+              <div style="flex:1;font-size:11px;color:var(--texto-suave);font-weight:600;">UNIDADE</div>
+              <div style="width:26px;"></div>
+            </div>
+            ${state.volumeLinhas.map((linha, i) => `
+              <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;">
+                <input data-linha-idx="${i}" data-campo="qtd" type="text" inputmode="decimal" placeholder="Ex: 22" value="${linha.qtd}" style="flex:1;min-width:0;" />
+                <span style="color:var(--texto-suave);font-weight:700;">×</span>
+                <input data-linha-idx="${i}" data-campo="pecas" type="text" inputmode="decimal" placeholder="Ex: 12 (opcional)" value="${linha.pecas}" style="flex:1;min-width:0;" />
+                <button data-remover-linha="${i}" style="background:none;border:none;color:var(--vermelho);font-size:18px;padding:0 4px;">✕</button>
+              </div>
+            `).join('')}
+            <button class="btn btn-outline btn-sm" id="btn-add-linha" style="width:100%;margin-bottom:10px;">+ ADICIONAR LINHA</button>
+            <div style="text-align:center;background:var(--azul-claro);border-radius:10px;padding:10px;margin-bottom:12px;">
+              <div style="font-size:11px;color:var(--texto-suave);">TOTAL CALCULADO</div>
+              <div style="font-size:24px;font-weight:800;color:var(--azul-escuro);">${calcularTotalVolumes()}</div>
+            </div>
+            <button class="btn btn-primary" id="btn-confirmar-volumes">CONFIRMAR CÁLCULO</button>
+          </div>
+        ` : `
+          <div class="loc-resumo" style="margin-bottom:12px;">
+            <span>📦 Total por volumes: <b>${calcularTotalVolumes()}</b></span>
+            <button id="btn-alterar-volumes">ALTERAR</button>
+          </div>
+        `}
+        ${!state._localExpandida ? `
+          <div class="loc-resumo">
+            <span>📍 ${state.arvore || state.lado ? `Árvore ${state.arvore || '-'} · Lado ${state.lado || '-'}` : 'Nenhuma localização definida'}</span>
+            <button id="btn-editar-local">${state.arvore || state.lado ? 'ALTERAR' : '+ DEFINIR'}</button>
+          </div>
+        ` : `
+          <div style="display:flex;gap:10px;">
+            <div class="field" style="flex:1;"><label>Árvore</label><input id="input-arvore" placeholder="Ex: 1" value="${state.arvore}" /></div>
+            <div class="field" style="flex:1;"><label>Lado</label><input id="input-lado" placeholder="Ex: B" value="${state.lado}" /></div>
+          </div>
+        `}
+        <div class="field" style="margin-top:10px;">
+          <label>Quantidade avariada (opcional)</label>
+          <input id="input-avaria" type="text" inputmode="decimal" placeholder="Ex: 5 — deixe em branco se não houver" value="${state.qtdAvaria}" />
         </div>
       </div>
-      <div class="qtd-control">
-        <button id="qtd-menos">−</button><input id="qtd-input" type="number" value="${state.qtd}" /><button id="qtd-mais">+</button>
+      <div class="registrar-fixo">
+        <button class="btn btn-lima" id="btn-registrar">REGISTRAR</button>
+        <button class="btn btn-ghost" id="btn-cancelar-produto" style="margin-top:6px;">CANCELAR</button>
       </div>
-      <div style="display:flex;gap:10px;">
-        <div class="field" style="flex:1;"><label>Árvore</label><input id="input-arvore" placeholder="Ex: 1" value="${state.arvore}" /></div>
-        <div class="field" style="flex:1;"><label>Lado</label><input id="input-lado" placeholder="Ex: B" value="${state.lado}" /></div>
-      </div>
-      <button class="btn btn-success" id="btn-registrar">REGISTRAR</button>
-      <button class="btn btn-ghost" id="btn-cancelar-produto">CANCELAR</button>
     `}
   </div>
   ${tabbar()}`;
@@ -566,7 +699,7 @@ function viewInventariar() {
 /* ---- RELATÓRIOS ---- */
 function viewRelatorios() {
   return `
-  <div class="topbar"><h1>Relatórios</h1></div>
+  <div class="topbar"><div class="titles">${brandIcon()}<h1>Relatórios</h1></div></div>
   <div class="content">
     ${inventoriesCache.length === 0 ? emptyState('📊','Nenhum inventário ainda') : inventoriesCache.map(inv => {
       const div = divergentProducts(inv);
@@ -579,11 +712,33 @@ function viewRelatorios() {
 
 /* ---- PERFIL ---- */
 function viewPerfil() {
+  const minhasEntradas = currentProfile.role === 'inventariar'
+    ? inventoriesCache.flatMap(inv => inv.entries
+        .filter(e => e.userName === currentProfile.nome)
+        .map(e => ({ ...e, inv })))
+      .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
+    : [];
+
   return `
-  <div class="topbar"><h1>Perfil</h1></div>
+  <div class="topbar"><div class="titles">${brandIcon()}<h1>Perfil</h1></div></div>
   <div class="content">
     <div class="card"><h3>${currentProfile.nome}</h3><div class="meta">Perfil: ${currentProfile.role === 'gerenciar' ? 'Gerenciar' : 'Inventariar'}</div></div>
-    <button class="btn btn-outline" id="btn-sair">SAIR</button>
+    ${currentProfile.role === 'inventariar' ? `
+      <div class="meta" style="font-weight:600;margin:16px 0 8px;">Produtos que eu contei (${minhasEntradas.length})</div>
+      ${minhasEntradas.length === 0 ? emptyState('📦','Você ainda não registrou nenhuma contagem') :
+        minhasEntradas.map(e => {
+          const p = e.inv.products.find(p => p.codigo === e.codigo);
+          return `<div class="card">
+            <div style="display:flex;justify-content:space-between;align-items:start;">
+              <h3>${p?.referencia || e.codigo}</h3>
+              <span class="badge badge-andamento">${e.round}ª contagem</span>
+            </div>
+            <div class="meta">${p?.descricao || ''}</div>
+            <div class="meta">Qtd: <b>${e.quantity}</b>${e.detalheContagem ? ` (${formatarDetalhe(e.detalheContagem)})` : ''}${e.qtdAvaria ? ` · <span style="color:var(--laranja);">${e.qtdAvaria} avariada</span>` : ''}${e.arvore ? ` · Árvore ${e.arvore}` : ''}${e.lado ? ` · Lado ${e.lado}` : ''} · Inventário ${e.inv.numero}</div>
+          </div>`;
+        }).join('')}
+    ` : ''}
+    <button class="btn btn-outline" id="btn-sair" style="margin-top:10px;">SAIR</button>
   </div>
   ${tabbar()}`;
 }
@@ -665,7 +820,10 @@ function bindGlobal() {
 
   document.querySelectorAll('[data-corrigir]').forEach(tr => tr.onclick = () => {
     if (currentProfile.role !== 'gerenciar') return;
-    state._corrigirCodigo = tr.dataset.corrigir; render();
+    state._corrigirCodigo = tr.dataset.corrigir; state._corrigirRound = 1; render();
+  });
+  document.querySelectorAll('[data-corr-round]').forEach(b => b.onclick = () => {
+    state._corrigirRound = +b.dataset.corrRound; render();
   });
   const btnFecharCorr = document.getElementById('btn-fechar-correcao');
   if (btnFecharCorr) btnFecharCorr.onclick = () => { state._corrigirCodigo = null; render(); };
@@ -675,8 +833,9 @@ function bindGlobal() {
     const motivo = document.getElementById('corr-motivo').value.trim();
     if (!motivo) { alert('Informe o motivo da correção.'); return; }
     const inv = currentInventory();
-    const s = productStatus(inv, state._corrigirCodigo);
-    await salvarCorrecaoSupabase(inv.id, state._corrigirCodigo, s.final ?? s.t1 ?? 0, novoTotal, motivo);
+    const round = state._corrigirRound || 1;
+    const oldTotal = effectiveRoundTotal(inv, state._corrigirCodigo, round);
+    await salvarCorrecaoSupabase(inv.id, state._corrigirCodigo, round, oldTotal, novoTotal, motivo);
     state._corrigirCodigo = null;
     render();
   };
@@ -703,7 +862,35 @@ function bindGlobal() {
   document.getElementById('qtd-menos')?.addEventListener('click', () => { state.qtd = Math.max(1, state.qtd - 1); render(); });
   document.getElementById('qtd-mais')?.addEventListener('click', () => { state.qtd = state.qtd + 1; render(); });
   document.getElementById('qtd-input')?.addEventListener('change', e => { state.qtd = Math.max(1, +e.target.value || 1); });
-  document.getElementById('btn-cancelar-produto')?.addEventListener('click', () => { state.produtoEncontrado = null; state.qtd = 1; state.arvore = ''; state.lado = ''; render(); });
+  document.querySelectorAll('[data-qtdmodo]').forEach(b => b.onclick = () => {
+    state.qtdModo = b.dataset.qtdmodo;
+    if (state.qtdModo === 'volumes' && state.volumeLinhas.length === 0) state.volumeLinhas = [linhaVazia()];
+    state._volumesExpandida = true;
+    saveLastQtyConfig(state.qtdModo);
+    render();
+  });
+  document.getElementById('btn-confirmar-volumes')?.addEventListener('click', () => {
+    if (calcularTotalVolumes() <= 0) { showToast('Preencha as linhas antes de confirmar.', true); return; }
+    state._volumesExpandida = false; render();
+  });
+  document.getElementById('btn-alterar-volumes')?.addEventListener('click', () => { state._volumesExpandida = true; render(); });
+  document.querySelectorAll('[data-linha-idx]').forEach(inp => inp.addEventListener('change', e => {
+    const idx = +inp.dataset.linhaIdx;
+    state.volumeLinhas[idx][inp.dataset.campo] = e.target.value;
+    render();
+  }));
+  document.getElementById('btn-add-linha')?.addEventListener('click', () => { state.volumeLinhas.push(linhaVazia()); render(); });
+  document.querySelectorAll('[data-remover-linha]').forEach(b => b.onclick = () => {
+    const idx = +b.dataset.removerLinha;
+    state.volumeLinhas.splice(idx, 1);
+    if (state.volumeLinhas.length === 0) state.volumeLinhas = [linhaVazia()];
+    render();
+  });
+  document.getElementById('btn-editar-local')?.addEventListener('click', () => { state._localExpandida = true; render(); });
+  document.getElementById('input-arvore')?.addEventListener('change', e => { state.arvore = e.target.value.trim(); });
+  document.getElementById('input-lado')?.addEventListener('change', e => { state.lado = e.target.value.trim(); });
+  document.getElementById('input-avaria')?.addEventListener('change', e => { state.qtdAvaria = e.target.value.trim(); });
+  document.getElementById('btn-cancelar-produto')?.addEventListener('click', () => { state.produtoEncontrado = null; state.qtd = 1; state.arvore = ''; state.lado = ''; state._localExpandida = false; render(); });
   document.getElementById('btn-registrar')?.addEventListener('click', registrarLancamento);
 }
 
@@ -717,19 +904,53 @@ function buscarProduto(valor) {
   if (state.currentRound === 3 && !divergentProducts(inv).some(p => p.codigo === codigo)) {
     showToast('Este produto não está aguardando 3ª contagem.', true); return;
   }
-  state.produtoEncontrado = produto; state.qtd = 1; render();
+  state.produtoEncontrado = produto;
+  state.qtd = 1;
+  const last = getLastLocation();
+  state.arvore = last.arvore;
+  state.lado = last.lado;
+  state._localExpandida = false;
+  const qtyCfg = getLastQtyConfig();
+  state.qtdModo = qtyCfg.modo || 'simples';
+  state.volumeLinhas = state.qtdModo === 'volumes' ? [linhaVazia()] : [];
+  state._volumesExpandida = true;
+  if (navigator.vibrate) navigator.vibrate(60);
+  render();
 }
 
 async function registrarLancamento() {
   const inv = currentInventory();
   const p = state.produtoEncontrado;
   if (!inv || !p) return;
-  const arvore = document.getElementById('input-arvore')?.value.trim() || '';
-  const lado = document.getElementById('input-lado')?.value.trim() || '';
-  const ok = await registrarLancamentoSupabase(inv.id, p.codigo, state.currentRound, state.qtd, arvore, lado);
+
+  let quantidade, detalheContagem = null;
+  if (state.qtdModo === 'volumes') {
+    quantidade = calcularTotalVolumes();
+    if (quantidade <= 0) { showToast('Preencha as linhas — o total precisa ser maior que zero.', true); return; }
+    detalheContagem = state.volumeLinhas
+      .filter(l => l.qtd !== '')
+      .map(l => ({ qtd: parseFloat(String(l.qtd).replace(',', '.')) || 0, pecas: l.pecas !== '' ? (parseFloat(String(l.pecas).replace(',', '.')) || 0) : null }));
+  } else {
+    quantidade = state.qtd;
+  }
+
+  const arvore = (state.arvore || '').trim();
+  const lado = (state.lado || '').trim();
+  const qtdAvaria = state.qtdAvaria !== '' ? (parseFloat(String(state.qtdAvaria).replace(',', '.')) || 0) : null;
+  if (qtdAvaria != null && qtdAvaria > quantidade) {
+    showToast('A quantidade avariada não pode ser maior que o total contado.', true);
+    return;
+  }
+  const ok = await registrarLancamentoSupabase(inv.id, p.codigo, state.currentRound, quantidade, arvore, lado, detalheContagem, qtdAvaria);
   if (!ok) return;
-  state.produtoEncontrado = null; state.qtd = 1; state.arvore = ''; state.lado = ''; render();
-  showToast('Lançamento registrado com sucesso.');
+  saveLastLocation(arvore, lado);
+  saveLastQtyConfig(state.qtdModo);
+  state.produtoEncontrado = null; state.qtd = 1; state.arvore = ''; state.lado = ''; state._localExpandida = false;
+  state.qtdAvaria = '';
+  state.volumeLinhas = state.qtdModo === 'volumes' ? [linhaVazia()] : [];
+  state._volumesExpandida = true;
+  render();
+  showToast(`Lançamento registrado: ${quantidade}${state.qtdModo === 'volumes' ? ' (calculado)' : ''}${qtdAvaria ? ` (${qtdAvaria} avariada)` : ''}`);
   setTimeout(() => document.getElementById('input-codigo')?.focus(), 50);
 }
 
@@ -765,20 +986,21 @@ function downloadCsv(filename, rows) {
 
 function exportLancamentosCsv(inv) {
   if (!inv) return;
-  const rows = [['CODPROD','DESCRICAO','QUANTIDADE','NUMINVENTARIO','CONTAGEM','ARVORE','LADO']];
+  const rows = [['CODPROD','DESCRICAO','QUANTIDADE','NUMINVENTARIO','CONTAGEM','ARVORE','LADO','DETALHAMENTO','QTD_AVARIA']];
   inv.entries.forEach(e => {
     const p = inv.products.find(p => p.codigo === e.codigo);
-    rows.push([e.codigo, p?.descricao || '', e.quantity, inv.numero, e.round, e.arvore || '', e.lado || '']);
+    rows.push([e.codigo, p?.descricao || '', e.quantity, inv.numero, e.round, e.arvore || '', e.lado || '', formatarDetalhe(e.detalheContagem), e.qtdAvaria ?? '']);
   });
   downloadCsv(`inventario_${inv.numero}_lancamentos.csv`, rows);
 }
 
 function exportFinalCsv(inv) {
   if (!inv) return;
-  const rows = [['CODPROD','DESCRICAO','QUANTIDADE','NUMINVENTARIO']];
+  const rows = [['CODPROD','DESCRICAO','QUANTIDADE','NUMINVENTARIO','QTD_AVARIA']];
   inv.products.forEach(p => {
     const s = productStatus(inv, p.codigo);
-    rows.push([p.codigo, p.descricao, s.final ?? '', inv.numero]);
+    const avaria = inv.entries.filter(e => e.codigo === p.codigo).reduce((soma, e) => soma + (e.qtdAvaria || 0), 0);
+    rows.push([p.codigo, p.descricao, s.final ?? '', inv.numero, avaria || '']);
   });
   downloadCsv(`inventario_${inv.numero}_final.csv`, rows);
 }
