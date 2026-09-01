@@ -193,9 +193,16 @@ function assinarTempoReal() {
 
 /* ---------------- REGRAS DE NEGÓCIO ---------------- */
 
+function formatNumeroBR(n) {
+  if (n === '' || n === null || n === undefined) return '';
+  const num = typeof n === 'number' ? n : parseFloat(n);
+  if (isNaN(num)) return n;
+  return String(num).replace('.', ',');
+}
+
 function formatarDetalhe(detalhe) {
   if (!detalhe || !detalhe.length) return '-';
-  return detalhe.map(l => l.pecas != null ? `${l.qtd}×${l.pecas}` : `${l.qtd}`).join(' + ');
+  return detalhe.map(l => l.pecas != null ? `${formatNumeroBR(l.qtd)}×${formatNumeroBR(l.pecas)}` : `${formatNumeroBR(l.qtd)}`).join(' + ');
 }
 
 function roundTotal(inv, codigo, round) {
@@ -508,7 +515,7 @@ function viewGerenciarInventario(inv) {
       ${inv.products.map(p => {
         const s = productStatus(inv, p.codigo);
         const avaria = inv.entries.filter(e => e.codigo === p.codigo).reduce((soma, e) => soma + (e.qtdAvaria || 0), 0);
-        return `<tr data-corrigir="${p.codigo}"><td>${p.codigo}</td><td>${p.referencia}</td><td>${s.t1||'-'}</td><td>${s.t2||'-'}</td><td>${s.t3||'-'}</td><td><b>${s.final ?? '-'}</b></td><td>${avaria ? `<span style="color:var(--laranja);font-weight:700;">${avaria}</span>` : '-'}</td><td>${statusBadge(s.status)}</td></tr>`;
+        return `<tr data-corrigir="${p.codigo}"><td>${p.codigo}</td><td>${p.referencia}</td><td>${s.t1?formatNumeroBR(s.t1):'-'}</td><td>${s.t2?formatNumeroBR(s.t2):'-'}</td><td>${s.t3?formatNumeroBR(s.t3):'-'}</td><td><b>${s.final!=null?formatNumeroBR(s.final):'-'}</b></td><td>${avaria ? `<span style="color:var(--laranja);font-weight:700;">${formatNumeroBR(avaria)}</span>` : '-'}</td><td>${statusBadge(s.status)}</td></tr>`;
       }).join('')}</table>`;
   } else if (state.gerenciarTab === 'equipe') {
     const totalLancamentos = inv.entries.length;
@@ -564,12 +571,12 @@ function modalCorrecao(inv) {
   <div style="position:fixed;inset:0;background:rgba(11,37,69,0.55);z-index:40;display:flex;align-items:center;justify-content:center;">
     <div class="card" style="width:88%;max-width:380px;max-height:85vh;overflow:auto;">
       <h3>Corrigir — ${p.referencia}</h3>
-      <div class="meta" style="margin-bottom:14px;">1ª: <b>${s.t1}</b> · 2ª: <b>${s.t2}</b> · 3ª: <b>${s.t3}</b> · Final: <b>${s.final ?? '-'}</b></div>
+      <div class="meta" style="margin-bottom:14px;">1ª: <b>${formatNumeroBR(s.t1)}</b> · 2ª: <b>${formatNumeroBR(s.t2)}</b> · 3ª: <b>${formatNumeroBR(s.t3)}</b> · Final: <b>${s.final!=null?formatNumeroBR(s.final):'-'}</b></div>
       ${lancamentos.length ? `
         <div class="meta" style="font-weight:600;margin-bottom:6px;">Onde foi contado</div>
         <table class="report" style="margin-bottom:16px;">
           <tr><th>Cont.</th><th>Qtd</th><th>Como</th><th>Avaria</th><th>Árvore</th><th>Lado</th><th>Quem</th></tr>
-          ${lancamentos.map(e => `<tr><td>${e.round}ª</td><td>${e.quantity}</td><td>${formatarDetalhe(e.detalheContagem)}</td><td>${e.qtdAvaria || '-'}</td><td>${e.arvore || '-'}</td><td>${e.lado || '-'}</td><td>${e.userName || '-'}</td></tr>`).join('')}
+          ${lancamentos.map(e => `<tr><td>${e.round}ª</td><td>${formatNumeroBR(e.quantity)}</td><td>${formatarDetalhe(e.detalheContagem)}</td><td>${e.qtdAvaria ? formatNumeroBR(e.qtdAvaria) : '-'}</td><td>${e.arvore || '-'}</td><td>${e.lado || '-'}</td><td>${e.userName || '-'}</td></tr>`).join('')}
         </table>
       ` : ''}
       <div class="field">
@@ -661,13 +668,13 @@ function viewInventariar() {
             <button class="btn btn-outline btn-sm" id="btn-add-linha" style="width:100%;margin-bottom:10px;">+ ADICIONAR LINHA</button>
             <div style="text-align:center;background:var(--azul-claro);border-radius:10px;padding:10px;margin-bottom:12px;">
               <div style="font-size:11px;color:var(--texto-suave);">TOTAL CALCULADO</div>
-              <div style="font-size:24px;font-weight:800;color:var(--azul-escuro);">${calcularTotalVolumes()}</div>
+              <div style="font-size:24px;font-weight:800;color:var(--azul-escuro);">${formatNumeroBR(calcularTotalVolumes())}</div>
             </div>
             <button class="btn btn-primary" id="btn-confirmar-volumes">CONFIRMAR CÁLCULO</button>
           </div>
         ` : `
           <div class="loc-resumo" style="margin-bottom:12px;">
-            <span>📦 Total por volumes: <b>${calcularTotalVolumes()}</b></span>
+            <span>📦 Total por volumes: <b>${formatNumeroBR(calcularTotalVolumes())}</b></span>
             <button id="btn-alterar-volumes">ALTERAR</button>
           </div>
         `}
@@ -736,7 +743,7 @@ function viewPerfil() {
                 <span class="badge badge-andamento">${e.round}ª contagem</span>
               </div>
               <div class="meta">${p?.descricao || ''}</div>
-              <div class="meta">Qtd: <b>${e.quantity}</b>${e.detalheContagem ? ` (${formatarDetalhe(e.detalheContagem)})` : ''}${e.qtdAvaria ? ` · <span style="color:var(--laranja);">${e.qtdAvaria} avariada</span>` : ''}${e.arvore ? ` · Árvore ${e.arvore}` : ''}${e.lado ? ` · Lado ${e.lado}` : ''} · Inventário ${e.inv.numero}</div>
+              <div class="meta">Qtd: <b>${formatNumeroBR(e.quantity)}</b>${e.detalheContagem ? ` (${formatarDetalhe(e.detalheContagem)})` : ''}${e.qtdAvaria ? ` · <span style="color:var(--laranja);">${formatNumeroBR(e.qtdAvaria)} avariada</span>` : ''}${e.arvore ? ` · Árvore ${e.arvore}` : ''}${e.lado ? ` · Lado ${e.lado}` : ''} · Inventário ${e.inv.numero}</div>
             </div>`;
           }).join('')}
         </div>
@@ -953,7 +960,7 @@ async function registrarLancamento() {
   state.volumeLinhas = state.qtdModo === 'volumes' ? [linhaVazia()] : [];
   state._volumesExpandida = true;
   render();
-  showToast(`Lançamento registrado: ${quantidade}${state.qtdModo === 'volumes' ? ' (calculado)' : ''}${qtdAvaria ? ` (${qtdAvaria} avariada)` : ''}`);
+  showToast(`Lançamento registrado: ${formatNumeroBR(quantidade)}${state.qtdModo === 'volumes' ? ' (calculado)' : ''}${qtdAvaria ? ` (${formatNumeroBR(qtdAvaria)} avariada)` : ''}`);
   setTimeout(() => document.getElementById('input-codigo')?.focus(), 50);
 }
 
@@ -992,18 +999,23 @@ function exportLancamentosCsv(inv) {
   const rows = [['CODPROD','DESCRICAO','QUANTIDADE','NUMINVENTARIO','CONTAGEM','ARVORE','LADO','DETALHAMENTO','QTD_AVARIA']];
   inv.entries.forEach(e => {
     const p = inv.products.find(p => p.codigo === e.codigo);
-    rows.push([e.codigo, p?.descricao || '', e.quantity, inv.numero, e.round, e.arvore || '', e.lado || '', formatarDetalhe(e.detalheContagem), e.qtdAvaria ?? '']);
+    rows.push([e.codigo, p?.descricao || '', formatNumeroBR(e.quantity), inv.numero, e.round, e.arvore || '', e.lado || '', formatarDetalhe(e.detalheContagem), formatNumeroBR(e.qtdAvaria)]);
   });
   downloadCsv(`inventario_${inv.numero}_lancamentos.csv`, rows);
 }
 
 function exportFinalCsv(inv) {
   if (!inv) return;
-  const rows = [['CODPROD','DESCRICAO','QUANTIDADE','NUMINVENTARIO','QTD_AVARIA']];
+  const rows = [['CODPROD','DESCRICAO','QTD','STATUS','NUMINVENTARIO','QTD_AVARIA','LOCALIZACOES']];
   inv.products.forEach(p => {
     const s = productStatus(inv, p.codigo);
-    const avaria = inv.entries.filter(e => e.codigo === p.codigo).reduce((soma, e) => soma + (e.qtdAvaria || 0), 0);
-    rows.push([p.codigo, p.descricao, s.final ?? '', inv.numero, avaria || '']);
+    const entradasProduto = inv.entries.filter(e => e.codigo === p.codigo);
+    const avaria = entradasProduto.reduce((soma, e) => soma + (e.qtdAvaria || 0), 0);
+    const locs = [...new Set(entradasProduto
+      .filter(e => e.arvore || e.lado)
+      .map(e => `${e.arvore || '-'}/${e.lado || '-'}`))].join('; ');
+    const qtd = s.final ?? s.t3 ?? s.t2 ?? s.t1 ?? '';
+    rows.push([p.codigo, p.descricao, formatNumeroBR(qtd), s.status, inv.numero, formatNumeroBR(avaria || ''), locs || '-']);
   });
   downloadCsv(`inventario_${inv.numero}_final.csv`, rows);
 }
