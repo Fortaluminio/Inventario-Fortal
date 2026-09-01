@@ -723,22 +723,25 @@ function viewPerfil() {
   <div class="topbar"><div class="titles">${brandIcon()}<h1>Perfil</h1></div></div>
   <div class="content">
     <div class="card"><h3>${currentProfile.nome}</h3><div class="meta">Perfil: ${currentProfile.role === 'gerenciar' ? 'Gerenciar' : 'Inventariar'}</div></div>
+    <button class="btn btn-outline" id="btn-sair" style="margin-bottom:18px;">SAIR</button>
     ${currentProfile.role === 'inventariar' ? `
-      <div class="meta" style="font-weight:600;margin:16px 0 8px;">Produtos que eu contei (${minhasEntradas.length})</div>
-      ${minhasEntradas.length === 0 ? emptyState('📦','Você ainda não registrou nenhuma contagem') :
-        minhasEntradas.map(e => {
-          const p = e.inv.products.find(p => p.codigo === e.codigo);
-          return `<div class="card">
-            <div style="display:flex;justify-content:space-between;align-items:start;">
-              <h3>${p?.referencia || e.codigo}</h3>
-              <span class="badge badge-andamento">${e.round}ª contagem</span>
-            </div>
-            <div class="meta">${p?.descricao || ''}</div>
-            <div class="meta">Qtd: <b>${e.quantity}</b>${e.detalheContagem ? ` (${formatarDetalhe(e.detalheContagem)})` : ''}${e.qtdAvaria ? ` · <span style="color:var(--laranja);">${e.qtdAvaria} avariada</span>` : ''}${e.arvore ? ` · Árvore ${e.arvore}` : ''}${e.lado ? ` · Lado ${e.lado}` : ''} · Inventário ${e.inv.numero}</div>
-          </div>`;
-        }).join('')}
+      <div class="meta" style="font-weight:600;margin-bottom:8px;">Produtos que eu contei (${minhasEntradas.length})</div>
+      ${minhasEntradas.length === 0 ? emptyState('📦','Você ainda não registrou nenhuma contagem') : `
+        <div class="lista-scroll">
+          ${minhasEntradas.map(e => {
+            const p = e.inv.products.find(p => p.codigo === e.codigo);
+            return `<div class="card">
+              <div style="display:flex;justify-content:space-between;align-items:start;">
+                <h3>${p?.referencia || e.codigo}</h3>
+                <span class="badge badge-andamento">${e.round}ª contagem</span>
+              </div>
+              <div class="meta">${p?.descricao || ''}</div>
+              <div class="meta">Qtd: <b>${e.quantity}</b>${e.detalheContagem ? ` (${formatarDetalhe(e.detalheContagem)})` : ''}${e.qtdAvaria ? ` · <span style="color:var(--laranja);">${e.qtdAvaria} avariada</span>` : ''}${e.arvore ? ` · Árvore ${e.arvore}` : ''}${e.lado ? ` · Lado ${e.lado}` : ''} · Inventário ${e.inv.numero}</div>
+            </div>`;
+          }).join('')}
+        </div>
+      `}
     ` : ''}
-    <button class="btn btn-outline" id="btn-sair" style="margin-top:10px;">SAIR</button>
   </div>
   ${tabbar()}`;
 }

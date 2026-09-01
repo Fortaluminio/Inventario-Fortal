@@ -254,6 +254,9 @@ label { font-size: 13px; color: var(--texto-suave); display: block; margin-botto
 .empty-state { text-align: center; color: var(--texto-suave); padding: 60px 20px; }
 .empty-state .ic { font-size: 42px; margin-bottom: 10px; }
 
+.lista-scroll { max-height: 46vh; overflow-y: auto; padding-right: 2px; margin-bottom: 8px; }
+.lista-scroll .card:last-child { margin-bottom: 0; }
+
 .tabs-inline { display: flex; gap: 8px; margin-bottom: 14px; overflow-x: auto; }
 .tabs-inline button {
   background: var(--branco); border: 1px solid var(--borda); border-radius: 20px;
