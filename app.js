@@ -554,7 +554,13 @@ function viewGerenciarInventario(inv) {
       </div>
     </div>
     <button class="btn btn-primary" id="btn-export-xlsx" style="margin-bottom:8px;">RELATÓRIO COMPLETO (EXCEL — RESUMO + DETALHAMENTO)</button>
-    <button class="btn btn-ghost" id="btn-export-csv">EXCEL DOS LANÇAMENTOS ATUAIS (CSV)</button>`;
+    <button class="btn btn-ghost" id="btn-export-csv" style="margin-bottom:12px;">EXCEL DOS LANÇAMENTOS ATUAIS (CSV)</button>
+    <div class="meta" style="font-weight:600;margin-bottom:8px;">Baixar só uma contagem</div>
+    <div style="display:flex;gap:8px;margin-bottom:8px;">
+      <button class="btn btn-outline btn-sm" data-export-round="1" style="flex:1;">1ª CONTAGEM</button>
+      <button class="btn btn-outline btn-sm" data-export-round="2" style="flex:1;">2ª CONTAGEM</button>
+      <button class="btn btn-outline btn-sm" data-export-round="3" style="flex:1;">3ª CONTAGEM</button>
+    </div>`;
   } else if (state.gerenciarTab === 'produtos') {
     body = `<table class="report"><tr><th>Cód</th><th>Ref</th><th>1ª</th><th>2ª</th><th>3ª</th><th>Final</th><th>Avaria</th><th>Status</th></tr>
       ${inv.products.map(p => {
@@ -871,6 +877,9 @@ function bindGlobal() {
   if (btnExportCsv) btnExportCsv.onclick = () => exportLancamentosCsv(currentInventory());
   const btnExportXlsx = document.getElementById('btn-export-xlsx');
   if (btnExportXlsx) btnExportXlsx.onclick = () => exportRelatorioCompletoXlsx(currentInventory());
+  document.querySelectorAll('[data-export-round]').forEach(b => b.onclick = () => {
+    exportLancamentosPorContagem(currentInventory(), +b.dataset.exportRound);
+  });
   document.querySelectorAll('[data-export-final]').forEach(b => b.onclick = () => {
     exportFinalCsv(inventoriesCache.find(i => i.id === b.dataset.exportFinal));
   });
@@ -1049,6 +1058,22 @@ function exportLancamentosCsv(inv) {
     rows.push([e.codigo, p?.descricao || '', formatNumeroBR(e.quantity), inv.numero, e.round, e.arvore || '', e.lado || '', formatarDetalhe(e.detalheContagem), formatNumeroBR(e.qtdAvaria)]);
   });
   downloadCsv(`inventario_${inv.numero}_lancamentos.csv`, rows);
+}
+
+function exportLancamentosPorContagem(inv, round) {
+  if (!inv) return;
+  const rows = [['CODPROD','REFERENCIA','DESCRICAO','QUANTIDADE','NUMINVENTARIO','LOCALIZACOES','DETALHAMENTO','QTD_AVARIA']];
+  const produtosDaContagem = inv.products.filter(p => inv.entries.some(e => e.codigo === p.codigo && e.round === round));
+  produtosDaContagem.forEach(p => {
+    const entradas = inv.entries.filter(e => e.codigo === p.codigo && e.round === round);
+    const total = entradas.reduce((soma, e) => soma + e.quantity, 0);
+    const avaria = entradas.reduce((soma, e) => soma + (e.qtdAvaria || 0), 0);
+    const locs = [...new Set(entradas.filter(e => e.arvore || e.lado).map(e => `${e.arvore || '-'}/${e.lado || '-'}`))].join('; ');
+    const detalhes = entradas.map(e => e.detalheContagem ? formatarDetalhe(e.detalheContagem) : formatNumeroBR(e.quantity)).join(' | ');
+    rows.push([p.codigo, p.referencia, p.descricao, formatNumeroBR(total), inv.numero, locs || '-', detalhes || '-', formatNumeroBR(avaria || '')]);
+  });
+  if (rows.length === 1) { showToast(`Não há lançamentos na ${round}ª contagem ainda.`, true); return; }
+  downloadCsv(`inventario_${inv.numero}_${round}a_contagem.csv`, rows);
 }
 
 function exportRelatorioCompletoXlsx(inv) {
