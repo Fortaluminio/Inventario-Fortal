@@ -515,6 +515,25 @@ function viewGerenciarInventario(inv) {
     <div class="progress-row"><div class="label-row"><span>2ª CONTAGEM</span><span>${p2}%</span></div><div class="progress-bar-bg"><div class="progress-bar-fill" style="width:${p2}%"></div></div></div>
     <div class="progress-row"><div class="label-row"><span>3ª CONTAGEM${div.length?` (${div.length} produtos)`:''}</span><span>${p3}%</span></div><div class="progress-bar-bg"><div class="progress-bar-fill" style="width:${p3}%"></div></div></div>
     ${div.length ? `<div class="card"><h3>⚠️ Divergências</h3><div class="meta">${div.length} produto(s) aguardando 3ª contagem</div></div>` : ''}
+    <div class="meta" style="font-weight:600;margin:16px 0 8px;">Resumo por produto</div>
+    <div class="lista-scroll">
+      ${inv.products.map(p => {
+        const s = productStatus(inv, p.codigo);
+        const qtd = s.final ?? s.t3 ?? s.t2 ?? s.t1 ?? 0;
+        return `<div class="card" style="padding:12px 14px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;">
+            <div style="min-width:0;">
+              <div style="font-weight:700;font-size:13px;color:var(--texto);">${p.referencia}</div>
+              <div style="font-size:11px;color:var(--texto-suave);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${p.descricao}</div>
+            </div>
+            <div style="text-align:right;flex-shrink:0;">
+              <div style="font-weight:800;font-size:17px;color:var(--azul-escuro);">${formatNumeroBR(qtd)}</div>
+              ${statusBadge(s.status)}
+            </div>
+          </div>
+        </div>`;
+      }).join('')}
+    </div>
     <div class="card">
       <h3>Controle de etapas</h3>
       <div style="display:flex;flex-direction:column;gap:8px;margin-top:10px;">
@@ -526,6 +545,7 @@ function viewGerenciarInventario(inv) {
         ${inv.roundClosed[2] && (div.length === 0 || inv.roundClosed[3]) && inv.status !== 'finalizado' ? `<button class="btn btn-success btn-sm" data-finalizar="1">FINALIZAR INVENTÁRIO</button>` : ''}
       </div>
     </div>
+    <button class="btn btn-primary" id="btn-export-xlsx" style="margin-bottom:8px;">RELATÓRIO COMPLETO (EXCEL — RESUMO + DETALHAMENTO)</button>
     <button class="btn btn-ghost" id="btn-export-csv">EXCEL DOS LANÇAMENTOS ATUAIS (CSV)</button>`;
   } else if (state.gerenciarTab === 'produtos') {
     body = `<table class="report"><tr><th>Cód</th><th>Ref</th><th>1ª</th><th>2ª</th><th>3ª</th><th>Final</th><th>Avaria</th><th>Status</th></tr>
@@ -841,6 +861,8 @@ function bindGlobal() {
   });
   const btnExportCsv = document.getElementById('btn-export-csv');
   if (btnExportCsv) btnExportCsv.onclick = () => exportLancamentosCsv(currentInventory());
+  const btnExportXlsx = document.getElementById('btn-export-xlsx');
+  if (btnExportXlsx) btnExportXlsx.onclick = () => exportRelatorioCompletoXlsx(currentInventory());
   document.querySelectorAll('[data-export-final]').forEach(b => b.onclick = () => {
     exportFinalCsv(inventoriesCache.find(i => i.id === b.dataset.exportFinal));
   });
@@ -1019,6 +1041,36 @@ function exportLancamentosCsv(inv) {
     rows.push([e.codigo, p?.descricao || '', formatNumeroBR(e.quantity), inv.numero, e.round, e.arvore || '', e.lado || '', formatarDetalhe(e.detalheContagem), formatNumeroBR(e.qtdAvaria)]);
   });
   downloadCsv(`inventario_${inv.numero}_lancamentos.csv`, rows);
+}
+
+function exportRelatorioCompletoXlsx(inv) {
+  if (!inv) return;
+
+  const resumo = [['CODPROD','REFERENCIA','QTD_1A','QTD_2A','QTD_3A','QTD_FINAL','QTD_AVARIA','STATUS']];
+  inv.products.forEach(p => {
+    const s = productStatus(inv, p.codigo);
+    const entradasProduto = inv.entries.filter(e => e.codigo === p.codigo);
+    const avaria = entradasProduto.reduce((soma, e) => soma + (e.qtdAvaria || 0), 0);
+    resumo.push([p.codigo, p.referencia, s.t1 || '', s.t2 || '', s.t3 || '', s.final ?? '', avaria || '', s.status]);
+  });
+
+  const detalhamento = [['CODPROD','REFERENCIA','DESCRICAO','CONTAGEM','QUANTIDADE','COMO','QTD_AVARIA','ARVORE','LADO','USUARIO','DATA_HORA']];
+  inv.entries
+    .slice()
+    .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp))
+    .forEach(e => {
+      const p = inv.products.find(p => p.codigo === e.codigo);
+      detalhamento.push([
+        e.codigo, p?.referencia || '', p?.descricao || '', e.round, e.quantity,
+        formatarDetalhe(e.detalheContagem), e.qtdAvaria ?? '', e.arvore || '', e.lado || '',
+        e.userName || '', new Date(e.timestamp).toLocaleString('pt-BR'),
+      ]);
+    });
+
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(resumo), 'Resumo');
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(detalhamento), 'Detalhamento');
+  XLSX.writeFile(wb, `inventario_${inv.numero}_relatorio.xlsx`);
 }
 
 function exportFinalCsv(inv) {
