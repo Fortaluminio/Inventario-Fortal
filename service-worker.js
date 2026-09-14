@@ -1,4 +1,4 @@
-const CACHE = 'inventario-fortal-v15';
+const CACHE = 'inventario-fortal-v17';
 const CORE = [
   './', './index.html', './styles.css', './app.js', './config.js', './manifest.webmanifest',
   './data/products.json', './icons/icon-192.png', './icons/icon-512.png'
@@ -17,6 +17,15 @@ self.addEventListener('activate', e => {
 });
 
 self.addEventListener('fetch', e => {
+  const url = new URL(e.request.url);
+
+  // Nunca mexe em chamadas para fora do próprio site (Supabase, CDNs, etc.)
+  // — essas sempre vão direto pra rede, sem passar pelo cache.
+  if (url.origin !== self.location.origin) return;
+
+  // Só GET pode ser guardado em cache (o navegador não permite cachear POST/PUT).
+  if (e.request.method !== 'GET') return;
+
   const isImage = e.request.url.includes('/assets/products/');
   if (isImage) {
     // Fotos de produtos não mudam: cache primeiro, é mais rápido.

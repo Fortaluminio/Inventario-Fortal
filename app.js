@@ -8,7 +8,22 @@
    fica no banco compartilhado.
    ============================================================ */
 
-const sb = window.supabase.createClient(window.SUPABASE_CONFIG.url, window.SUPABASE_CONFIG.key);
+let sb;
+try {
+  if (typeof window.supabase === 'undefined') throw new Error('Biblioteca do Supabase não carregou.');
+  sb = window.supabase.createClient(window.SUPABASE_CONFIG.url, window.SUPABASE_CONFIG.key);
+} catch (err) {
+  document.getElementById('app').innerHTML = `
+    <div style="min-height:100vh;display:flex;align-items:center;justify-content:center;padding:32px;background:#F5F5F7;">
+      <div style="text-align:center;max-width:320px;">
+        <div style="font-size:40px;margin-bottom:12px;">📡</div>
+        <h2 style="color:#182642;font-size:18px;margin-bottom:8px;">Não foi possível carregar o app</h2>
+        <p style="color:#626B7A;font-size:14px;margin-bottom:20px;">Verifique sua conexão com a internet e tente novamente.</p>
+        <button onclick="location.reload()" style="padding:12px 24px;background:#1E5FA8;color:#fff;border:none;border-radius:10px;font-weight:700;font-size:14px;">TENTAR DE NOVO</button>
+      </div>
+    </div>`;
+  throw err;
+}
 
 /* ---------------- SESSÃO / LOGIN ---------------- */
 
@@ -263,7 +278,9 @@ function divergentProducts(inv) {
 
 /* ---------------- LEITURA DO PDF (WinThor rotina 1147) ---------------- */
 
-pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://unpkg.com/pdfjs-dist@3.11.174/build/pdf.worker.min.js';
+if (typeof pdfjsLib !== 'undefined') {
+  pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://unpkg.com/pdfjs-dist@3.11.174/build/pdf.worker.min.js';
+}
 
 async function extractTextFromPdf(file) {
   const buf = await file.arrayBuffer();
