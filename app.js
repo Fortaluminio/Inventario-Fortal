@@ -523,25 +523,6 @@ function viewGerenciarInventario(inv) {
     <div class="progress-row"><div class="label-row"><span>2ª CONTAGEM</span><span>${p2}%</span></div><div class="progress-bar-bg"><div class="progress-bar-fill" style="width:${p2}%"></div></div></div>
     <div class="progress-row"><div class="label-row"><span>3ª CONTAGEM${div.length?` (${div.length} produtos)`:''}</span><span>${p3}%</span></div><div class="progress-bar-bg"><div class="progress-bar-fill" style="width:${p3}%"></div></div></div>
     ${div.length ? `<div class="card"><h3>⚠️ Divergências</h3><div class="meta">${div.length} produto(s) aguardando 3ª contagem</div></div>` : ''}
-    <div class="meta" style="font-weight:600;margin:16px 0 8px;">Resumo por produto</div>
-    <div class="lista-scroll">
-      ${inv.products.map(p => {
-        const s = productStatus(inv, p.codigo);
-        const qtd = melhorQuantidade(inv, p.codigo);
-        return `<div class="card" style="padding:12px 14px;">
-          <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;">
-            <div style="min-width:0;">
-              <div style="font-weight:700;font-size:13px;color:var(--texto);">${p.referencia}</div>
-              <div style="font-size:11px;color:var(--texto-suave);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${p.descricao}</div>
-            </div>
-            <div style="text-align:right;flex-shrink:0;">
-              <div style="font-weight:800;font-size:17px;color:var(--azul-escuro);">${formatNumeroBR(qtd)}</div>
-              ${statusBadge(s.status)}
-            </div>
-          </div>
-        </div>`;
-      }).join('')}
-    </div>
     <div class="card">
       <h3>Controle de etapas</h3>
       <div style="display:flex;flex-direction:column;gap:8px;margin-top:10px;">
