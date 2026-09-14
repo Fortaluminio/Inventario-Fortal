@@ -220,6 +220,14 @@ function formatarDetalhe(detalhe) {
   return detalhe.map(l => l.pecas != null ? `${formatNumeroBR(l.qtd)}×${formatNumeroBR(l.pecas)}` : `${formatNumeroBR(l.qtd)}`).join(' + ');
 }
 
+function melhorQuantidade(inv, codigo) {
+  const s = productStatus(inv, codigo);
+  if (s.final != null) return s.final;
+  if (roundHasData(inv, codigo, 3)) return s.t3;
+  if (roundHasData(inv, codigo, 2)) return s.t2;
+  return s.t1;
+}
+
 function roundTotal(inv, codigo, round) {
   return inv.entries.filter(e => e.codigo === codigo && e.round === round).reduce((s, e) => s + e.quantity, 0);
 }
@@ -519,7 +527,7 @@ function viewGerenciarInventario(inv) {
     <div class="lista-scroll">
       ${inv.products.map(p => {
         const s = productStatus(inv, p.codigo);
-        const qtd = s.final ?? s.t3 ?? s.t2 ?? s.t1 ?? 0;
+        const qtd = melhorQuantidade(inv, p.codigo);
         return `<div class="card" style="padding:12px 14px;">
           <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;">
             <div style="min-width:0;">
@@ -1083,7 +1091,7 @@ function exportFinalCsv(inv) {
     const locs = [...new Set(entradasProduto
       .filter(e => e.arvore || e.lado)
       .map(e => `${e.arvore || '-'}/${e.lado || '-'}`))].join('; ');
-    const qtd = s.final ?? s.t3 ?? s.t2 ?? s.t1 ?? '';
+    const qtd = melhorQuantidade(inv, p.codigo);
     rows.push([p.codigo, p.descricao, formatNumeroBR(qtd), s.status, inv.numero, formatNumeroBR(avaria || ''), locs || '-']);
   });
   downloadCsv(`inventario_${inv.numero}_final.csv`, rows);
