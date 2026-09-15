@@ -266,11 +266,17 @@ function productStatus(inv, codigo) {
     status = 'AGUARDANDO 3ª';
   } else if (!inv.roundClosed[3]) {
     status = 'EM CONTAGEM (3ª)';
-  } else {
+  } else if (t3 === t1 || t3 === t2) {
     status = 'FINALIZADO'; final = t3;
+  } else {
+    status = 'DIVERGÊNCIA CRÍTICA';
   }
 
-  return { t1, t2, t3, final, status, divergente: c1 && c2 && inv.roundClosed[2] && t1 !== t2 };
+  return {
+    t1, t2, t3, final, status,
+    divergente: c1 && c2 && inv.roundClosed[2] && t1 !== t2,
+    alertaCritico: status === 'DIVERGÊNCIA CRÍTICA',
+  };
 }
 
 function inventoryProgress(inv, round) {
@@ -282,6 +288,10 @@ function inventoryProgress(inv, round) {
 
 function divergentProducts(inv) {
   return inv.products.filter(p => productStatus(inv, p.codigo).divergente);
+}
+
+function produtosDivergenciaCritica(inv) {
+  return inv.products.filter(p => productStatus(inv, p.codigo).alertaCritico);
 }
 
 /* ---------------- LEITURA DO PDF (WinThor rotina 1147) ---------------- */
@@ -508,6 +518,7 @@ function viewGerenciarInventario(inv) {
   const p1 = inventoryProgress(inv, 1), p2 = inventoryProgress(inv, 2), p3 = inventoryProgress(inv, 3);
   const finalizados = inv.products.filter(p => productStatus(inv, p.codigo).status === 'FINALIZADO').length;
   const div = divergentProducts(inv);
+  const divCritica = produtosDivergenciaCritica(inv);
 
   let body = '';
   if (state.gerenciarTab === 'resumo') {
@@ -522,6 +533,7 @@ function viewGerenciarInventario(inv) {
     <div class="progress-row"><div class="label-row"><span>1ª CONTAGEM</span><span>${p1}%</span></div><div class="progress-bar-bg"><div class="progress-bar-fill" style="width:${p1}%"></div></div></div>
     <div class="progress-row"><div class="label-row"><span>2ª CONTAGEM</span><span>${p2}%</span></div><div class="progress-bar-bg"><div class="progress-bar-fill" style="width:${p2}%"></div></div></div>
     <div class="progress-row"><div class="label-row"><span>3ª CONTAGEM${div.length?` (${div.length} produtos)`:''}</span><span>${p3}%</span></div><div class="progress-bar-bg"><div class="progress-bar-fill" style="width:${p3}%"></div></div></div>
+    ${divCritica.length ? `<div class="card" style="background:var(--vermelho-bg);border-color:var(--vermelho);"><h3 style="color:var(--vermelho);">⚠ Divergência crítica</h3><div class="meta" style="color:var(--vermelho);">${divCritica.length} produto(s) onde a 3ª contagem não bateu nem com a 1ª nem com a 2ª — revise manualmente na aba Produtos.</div></div>` : ''}
     ${div.length ? `<div class="card"><h3>⚠️ Divergências</h3><div class="meta">${div.length} produto(s) aguardando 3ª contagem</div></div>` : ''}
     <div class="card">
       <h3>Controle de etapas</h3>
@@ -531,16 +543,23 @@ function viewGerenciarInventario(inv) {
         ${inv.roundOpen[2] && !inv.roundClosed[2] ? `<button class="btn btn-outline btn-sm" data-encerrar="2">ENCERRAR 2ª CONTAGEM</button>` : ''}
         ${inv.roundClosed[2] && div.length > 0 && !inv.roundOpen[3] && !inv.roundClosed[3] ? `<button class="btn btn-outline btn-sm" data-abrir="3">INICIAR 3ª CONTAGEM</button>` : ''}
         ${inv.roundOpen[3] && !inv.roundClosed[3] ? `<button class="btn btn-outline btn-sm" data-encerrar="3">ENCERRAR 3ª CONTAGEM</button>` : ''}
-        ${inv.roundClosed[2] && (div.length === 0 || inv.roundClosed[3]) && inv.status !== 'finalizado' ? `<button class="btn btn-success btn-sm" data-finalizar="1">FINALIZAR INVENTÁRIO</button>` : ''}
+        ${inv.roundClosed[2] && (div.length === 0 || inv.roundClosed[3]) && divCritica.length === 0 && inv.status !== 'finalizado' ? `<button class="btn btn-success btn-sm" data-finalizar="1">FINALIZAR INVENTÁRIO</button>` : ''}
+        ${inv.roundClosed[3] && divCritica.length > 0 ? `<div class="meta" style="color:var(--vermelho);">Corrija as divergências críticas antes de finalizar.</div>` : ''}
       </div>
     </div>
     <button class="btn btn-primary" id="btn-export-xlsx" style="margin-bottom:8px;">RELATÓRIO COMPLETO (EXCEL — RESUMO + DETALHAMENTO)</button>
     <button class="btn btn-ghost" id="btn-export-csv" style="margin-bottom:12px;">EXCEL DOS LANÇAMENTOS ATUAIS (CSV)</button>
     <div class="meta" style="font-weight:600;margin-bottom:8px;">Baixar só uma contagem</div>
-    <div style="display:flex;gap:8px;margin-bottom:8px;">
+    <div style="display:flex;gap:8px;margin-bottom:16px;">
       <button class="btn btn-outline btn-sm" data-export-round="1" style="flex:1;">1ª CONTAGEM</button>
       <button class="btn btn-outline btn-sm" data-export-round="2" style="flex:1;">2ª CONTAGEM</button>
       <button class="btn btn-outline btn-sm" data-export-round="3" style="flex:1;">3ª CONTAGEM</button>
+    </div>
+    <div class="meta" style="font-weight:600;margin-bottom:8px;">Arquivo pra importar no WinThor (rotina 1147)</div>
+    <div style="display:flex;gap:8px;">
+      <button class="btn btn-outline btn-sm" data-export-txt="1" style="flex:1;">1ª CONTAGEM</button>
+      <button class="btn btn-outline btn-sm" data-export-txt="2" style="flex:1;">2ª CONTAGEM</button>
+      <button class="btn btn-outline btn-sm" data-export-txt="3" style="flex:1;">3ª CONTAGEM</button>
     </div>`;
   } else if (state.gerenciarTab === 'produtos') {
     body = `<table class="report"><tr><th>Cód</th><th>Ref</th><th>1ª</th><th>2ª</th><th>3ª</th><th>Final</th><th>Avaria</th><th>Status</th></tr>
@@ -589,6 +608,7 @@ function viewGerenciarInventario(inv) {
 function statusBadge(status) {
   if (status === 'FINALIZADO') return `<span class="badge badge-sucesso">FINALIZADO</span>`;
   if (status === 'AGUARDANDO 3ª') return `<span class="badge badge-alerta">AGUARDANDO 3ª</span>`;
+  if (status === 'DIVERGÊNCIA CRÍTICA') return `<span class="badge badge-erro">⚠ DIVERGÊNCIA CRÍTICA</span>`;
   return `<span class="badge badge-andamento">${status}</span>`;
 }
 
@@ -861,6 +881,9 @@ function bindGlobal() {
   document.querySelectorAll('[data-export-round]').forEach(b => b.onclick = () => {
     exportLancamentosPorContagem(currentInventory(), +b.dataset.exportRound);
   });
+  document.querySelectorAll('[data-export-txt]').forEach(b => b.onclick = () => {
+    exportTxtRotina1147(currentInventory(), +b.dataset.exportTxt);
+  });
   document.querySelectorAll('[data-export-final]').forEach(b => b.onclick = () => {
     exportFinalCsv(inventoriesCache.find(i => i.id === b.dataset.exportFinal));
   });
@@ -949,7 +972,13 @@ function buscarProduto(valor) {
   const produto = inv.products.find(p => p.codigo === codigo);
   if (!produto) { showToast('Este produto não pertence a este inventário.', true); return; }
   if (state.currentRound === 3 && !divergentProducts(inv).some(p => p.codigo === codigo)) {
-    showToast('Este produto não está aguardando 3ª contagem.', true); return;
+    const s = productStatus(inv, codigo);
+    if (s.status === 'FINALIZADO' && s.t1 === s.t2) {
+      showToast(`Esse produto já bateu na 1ª e 2ª contagem (${formatNumeroBR(s.final)}) — não precisa contar de novo, já foi preenchido automaticamente.`, true);
+    } else {
+      showToast('Este produto não está aguardando 3ª contagem.', true);
+    }
+    return;
   }
   state.produtoEncontrado = produto;
   state.qtd = 1;
@@ -1029,6 +1058,32 @@ function downloadCsv(filename, rows) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a'); a.href = url; a.download = filename; a.click();
   URL.revokeObjectURL(url);
+}
+
+function downloadTxt(filename, content) {
+  const blob = new Blob([content], { type: 'text/plain;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a'); a.href = url; a.download = filename; a.click();
+  URL.revokeObjectURL(url);
+}
+
+function exportTxtRotina1147(inv, round) {
+  if (!inv) return;
+  const produtosDaContagem = inv.products.filter(p => inv.entries.some(e => e.codigo === p.codigo && e.round === round));
+  if (produtosDaContagem.length === 0) { showToast(`Não há lançamentos na ${round}ª contagem ainda.`, true); return; }
+
+  const linhas = produtosDaContagem.map(p => {
+    const entradas = inv.entries.filter(e => e.codigo === p.codigo && e.round === round);
+    const total = entradas.reduce((soma, e) => soma + e.quantity, 0);
+    const codBarras = String(p.codigo).padStart(14, '0');
+    const codProd = String(p.codigo).padStart(6, '0');
+    const numInventario = String(inv.numero).padStart(6, '0');
+    const contagem = String(round).padStart(4, '0');
+    const quantidade = total.toFixed(1).replace('.', ',').padStart(6, '0');
+    return codBarras + codProd + numInventario + contagem + quantidade;
+  });
+
+  downloadTxt(`inventario_${inv.numero}_${round}a_contagem_rotina1147.txt`, linhas.join('\r\n'));
 }
 
 function exportLancamentosCsv(inv) {
