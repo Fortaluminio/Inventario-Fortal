@@ -546,6 +546,13 @@ function viewGerenciarInventario(inv) {
         ${inv.roundClosed[2] && (div.length === 0 || inv.roundClosed[3]) && divCritica.length === 0 && inv.status !== 'finalizado' ? `<button class="btn btn-success btn-sm" data-finalizar="1">FINALIZAR INVENTÁRIO</button>` : ''}
         ${inv.roundClosed[3] && divCritica.length > 0 ? `<div class="meta" style="color:var(--vermelho);">Corrija as divergências críticas antes de finalizar.</div>` : ''}
       </div>
+      <div class="meta" style="font-weight:600;margin:14px 0 8px;">Reabrir uma contagem</div>
+      <div style="display:flex;flex-direction:column;gap:8px;">
+        ${inv.roundClosed[1] ? `<button class="btn btn-outline btn-sm" style="border-color:var(--laranja);color:var(--laranja);" data-reabrir="1">REABRIR 1ª CONTAGEM</button>` : ''}
+        ${inv.roundClosed[2] ? `<button class="btn btn-outline btn-sm" style="border-color:var(--laranja);color:var(--laranja);" data-reabrir="2">REABRIR 2ª CONTAGEM</button>` : ''}
+        ${inv.roundClosed[3] ? `<button class="btn btn-outline btn-sm" style="border-color:var(--laranja);color:var(--laranja);" data-reabrir="3">REABRIR 3ª CONTAGEM</button>` : ''}
+        ${!inv.roundClosed[1] && !inv.roundClosed[2] && !inv.roundClosed[3] ? `<div class="meta">Nenhuma contagem encerrada ainda.</div>` : ''}
+      </div>
     </div>
     <button class="btn btn-primary" id="btn-export-xlsx" style="margin-bottom:8px;">RELATÓRIO COMPLETO (EXCEL — RESUMO + DETALHAMENTO)</button>
     <button class="btn btn-ghost" id="btn-export-csv" style="margin-bottom:12px;">EXCEL DOS LANÇAMENTOS ATUAIS (CSV)</button>
@@ -869,6 +876,15 @@ function bindGlobal() {
     const r = +b.dataset.abrir;
     const inv = currentInventory();
     atualizarEtapaSupabase(inv.id, { round_open: { ...inv.roundOpen, [r]: true } });
+  });
+  document.querySelectorAll('[data-reabrir]').forEach(b => b.onclick = () => {
+    const r = +b.dataset.reabrir;
+    const inv = currentInventory();
+    atualizarEtapaSupabase(inv.id, {
+      round_open: { ...inv.roundOpen, [r]: true },
+      round_closed: { ...inv.roundClosed, [r]: false },
+      status: 'em_andamento',
+    });
   });
   document.querySelectorAll('[data-finalizar]').forEach(b => b.onclick = () => {
     const inv = currentInventory();
