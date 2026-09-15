@@ -1042,7 +1042,7 @@ async function registrarLancamento() {
   if (state.currentRound === 3) {
     const s = productStatus(currentInventory(), p.codigo);
     if (s.status === 'DIVERGÊNCIA CRÍTICA') {
-      alertaDivergencia = `⚠ A 3ª contagem (${formatNumeroBR(s.t3)}) ainda não bate com a 1ª (${formatNumeroBR(s.t1)}) nem com a 2ª (${formatNumeroBR(s.t2)}). Avise o gerente — o inventário não finaliza assim.`;
+      alertaDivergencia = `⚠ Esta contagem ainda não bate com nenhuma das anteriores. Avise o gerente — o inventário não finaliza assim.`;
     }
   }
 
