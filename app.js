@@ -264,12 +264,12 @@ function productStatus(inv, codigo) {
     status = 'FINALIZADO'; final = t1;
   } else if (!c3) {
     status = 'AGUARDANDO 3ª';
+  } else if (t3 !== t1 && t3 !== t2) {
+    status = 'DIVERGÊNCIA CRÍTICA';
   } else if (!inv.roundClosed[3]) {
     status = 'EM CONTAGEM (3ª)';
-  } else if (t3 === t1 || t3 === t2) {
-    status = 'FINALIZADO'; final = t3;
   } else {
-    status = 'DIVERGÊNCIA CRÍTICA';
+    status = 'FINALIZADO'; final = t3;
   }
 
   return {
@@ -1037,21 +1037,34 @@ async function registrarLancamento() {
   if (!ok) return;
   saveLastLocation(arvore, lado);
   saveLastQtyConfig(state.qtdModo);
+
+  let alertaDivergencia = null;
+  if (state.currentRound === 3) {
+    const s = productStatus(currentInventory(), p.codigo);
+    if (s.status === 'DIVERGÊNCIA CRÍTICA') {
+      alertaDivergencia = `⚠ A 3ª contagem (${formatNumeroBR(s.t3)}) ainda não bate com a 1ª (${formatNumeroBR(s.t1)}) nem com a 2ª (${formatNumeroBR(s.t2)}). Avise o gerente — o inventário não finaliza assim.`;
+    }
+  }
+
   state.produtoEncontrado = null; state.qtd = 1; state.arvore = ''; state.lado = ''; state._localExpandida = false;
   state.qtdAvaria = '';
   state.volumeLinhas = state.qtdModo === 'volumes' ? [linhaVazia()] : [];
   state._volumesExpandida = true;
   render();
-  showToast(`Lançamento registrado: ${formatNumeroBR(quantidade)}${state.qtdModo === 'volumes' ? ' (calculado)' : ''}${qtdAvaria ? ` (${formatNumeroBR(qtdAvaria)} avariada)` : ''}`);
+  if (alertaDivergencia) {
+    showToast(alertaDivergencia, true, 6500);
+  } else {
+    showToast(`Lançamento registrado: ${formatNumeroBR(quantidade)}${state.qtdModo === 'volumes' ? ' (calculado)' : ''}${qtdAvaria ? ` (${formatNumeroBR(qtdAvaria)} avariada)` : ''}`);
+  }
   setTimeout(() => document.getElementById('input-codigo')?.focus(), 50);
 }
 
-function showToast(msg, erro) {
+function showToast(msg, erro, duracaoMs) {
   const el = document.createElement('div');
   el.className = 'toast' + (erro ? ' erro' : '');
   el.textContent = msg;
   document.body.appendChild(el);
-  setTimeout(() => el.remove(), 2400);
+  setTimeout(() => el.remove(), duracaoMs || 2400);
 }
 
 function iniciarScanner() {
