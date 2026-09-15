@@ -171,6 +171,13 @@ async function criarInventarioSupabase(numero, produtos) {
   await refreshInventories();
 }
 
+async function excluirLancamentoSupabase(entryId) {
+  const { error } = await sb.from('count_entries').delete().eq('id', entryId);
+  if (error) { showToast('Erro ao excluir: ' + error.message, true); return false; }
+  await refreshInventories();
+  return true;
+}
+
 async function registrarLancamentoSupabase(inventoryId, codigo, round, quantity, arvore, lado, detalheContagem, qtdAvaria) {
   const { error } = await sb.from('count_entries').insert({
     inventory_id: inventoryId, codigo, round, quantity, arvore: arvore || null, lado: lado || null,
@@ -634,8 +641,8 @@ function modalCorrecao(inv) {
       ${lancamentos.length ? `
         <div class="meta" style="font-weight:600;margin-bottom:6px;">Onde foi contado</div>
         <table class="report" style="margin-bottom:16px;">
-          <tr><th>Cont.</th><th>Qtd</th><th>Como</th><th>Avaria</th><th>Árvore</th><th>Lado</th><th>Quem</th></tr>
-          ${lancamentos.map(e => `<tr><td>${e.round}ª</td><td>${formatNumeroBR(e.quantity)}</td><td>${formatarDetalhe(e.detalheContagem)}</td><td>${e.qtdAvaria ? formatNumeroBR(e.qtdAvaria) : '-'}</td><td>${e.arvore || '-'}</td><td>${e.lado || '-'}</td><td>${e.userName || '-'}</td></tr>`).join('')}
+          <tr><th>Cont.</th><th>Qtd</th><th>Como</th><th>Avaria</th><th>Árvore</th><th>Lado</th><th>Quem</th><th></th></tr>
+          ${lancamentos.map(e => `<tr><td>${e.round}ª</td><td>${formatNumeroBR(e.quantity)}</td><td>${formatarDetalhe(e.detalheContagem)}</td><td>${e.qtdAvaria ? formatNumeroBR(e.qtdAvaria) : '-'}</td><td>${e.arvore || '-'}</td><td>${e.lado || '-'}</td><td>${e.userName || '-'}</td><td><button data-excluir-lancamento="${e.id}" style="background:none;border:none;color:var(--vermelho);font-size:15px;padding:0 4px;" title="Excluir este lançamento">✕</button></td></tr>`).join('')}
         </table>
       ` : ''}
       <div class="field">
@@ -925,6 +932,11 @@ function bindGlobal() {
     state._corrigirCodigo = null;
     render();
   };
+  document.querySelectorAll('[data-excluir-lancamento]').forEach(b => b.onclick = async () => {
+    if (!confirm('Excluir este lançamento? Essa ação não pode ser desfeita.')) return;
+    await excluirLancamentoSupabase(b.dataset.excluirLancamento);
+    render();
+  });
 
   document.querySelectorAll('[data-select-count-inv]').forEach(c => c.onclick = () => {
     state.currentInventoryId = c.dataset.selectCountInv; state.currentRound = 1; state.produtoEncontrado = null; render();

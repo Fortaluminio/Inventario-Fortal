@@ -114,6 +114,9 @@ create policy "importar produtos - gerenciar" on inventory_products for insert w
 -- ninguém pode editar ou apagar um lançamento já feito (só corrigir via tabela corrections)
 create policy "ler lancamentos" on count_entries for select using (auth.role() = 'authenticated');
 create policy "lancar contagem" on count_entries for insert with check (user_id = auth.uid());
+create policy "excluir lancamento - gerenciar" on count_entries for delete using (
+  exists (select 1 from profiles where id = auth.uid() and role = 'gerenciar')
+);
 
 -- corrections: leitura livre; só Gerenciar pode registrar correção; nunca editável
 create policy "ler correcoes" on corrections for select using (auth.role() = 'authenticated');
