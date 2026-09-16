@@ -310,6 +310,12 @@ function productStatus(inv, codigo) {
 }
 
 function inventoryProgress(inv, round) {
+  if (round === 3) {
+    const divergentes = divergentProducts(inv);
+    if (divergentes.length === 0) return 100;
+    const contados = divergentes.filter(p => roundHasData(inv, p.codigo, 3)).length;
+    return Math.round((contados / divergentes.length) * 100);
+  }
   const total = inv.products.length;
   if (total === 0) return 0;
   const counted = inv.products.filter(p => inv.entries.some(e => e.codigo === p.codigo && e.round === round)).length;
@@ -387,6 +393,7 @@ const state = {
   qtdAvaria: '',
   volumeLinhas: [],
   _volumesExpandida: true,
+  _popupAberto: null,
   arvore: '',
   lado: '',
   gerenciarTab: 'resumo',
@@ -716,6 +723,7 @@ function viewInventariar() {
   if (!inv) { state.currentInventoryId = null; return viewInventariar(); }
 
   const p = state.produtoEncontrado;
+  const rodadaHabilitada = r => inv.roundOpen[r] || (r === 1 && !inv.roundClosed[1]);
 
   return `
   <div class="topbar">
@@ -724,16 +732,22 @@ function viewInventariar() {
     <div style="width:36px;"></div>
   </div>
   <div class="content">
-    <div class="tabs-inline">
-      ${[1,2,3].map(r => `<button data-round="${r}" class="${state.currentRound===r?'active':''}" ${inv.roundOpen[r] || (r===1 && !inv.roundClosed[1]) ? '' : 'disabled'}>${r}ª CONTAGEM</button>`).join('')}
-    </div>
     ${!p ? `
+      <div class="icon-toolbar" style="grid-template-columns:1fr;">
+        <button data-abrir-popup="contagem"><span class="ic">🔄</span><span>${state.currentRound}ª contagem</span></button>
+      </div>
       <div class="scan-box" id="btn-abrir-camera"><div class="camera-ic">📷</div><b>TOCAR PARA ESCANEAR</b><p>ou digite o código abaixo</p></div>
       <div id="qr-reader" style="display:none;"></div>
       <div class="field"><label>CÓDIGO OU CÓDIGO DE BARRAS</label><input id="input-codigo" placeholder="Ex: 3 ou 200000000003" autofocus /></div>
       <button class="btn btn-primary" id="btn-buscar-produto">BUSCAR</button>
+      ${popupInventariar(inv, rodadaHabilitada)}
     ` : `
       <div style="padding-bottom:96px;">
+        <div class="icon-toolbar">
+          <button data-abrir-popup="local"><span class="ic">📌</span><span>Local</span></button>
+          <button data-abrir-popup="avaria"><span class="ic">⚠️</span><span>Avaria</span></button>
+          <button data-abrir-popup="contagem"><span class="ic">🔄</span><span>${state.currentRound}ª contagem</span></button>
+        </div>
         <div class="produto-encontrado-wrap">
           <div class="validado-badge"><span class="check">✓</span><span class="txt">Produto encontrado — confira antes de registrar</span></div>
           <div class="produto-encontrado" style="padding:0 8px 14px;">
@@ -744,9 +758,9 @@ function viewInventariar() {
             <h3 style="margin-top:6px;">${p.descricao}</h3>
           </div>
         </div>
-        <div class="tabs-inline">
-          <button data-qtdmodo="simples" class="${state.qtdModo==='simples'?'active':''}">QTD. SIMPLES</button>
-          <button data-qtdmodo="volumes" class="${state.qtdModo==='volumes'?'active':''}">POR VOLUMES</button>
+        <div class="icon-toolbar" style="grid-template-columns:1fr 1fr;">
+          <button data-qtdmodo="simples" class="${state.qtdModo==='simples'?'active':''}"><span class="ic">✏️</span><span>SIMPLES</span></button>
+          <button data-qtdmodo="volumes" class="${state.qtdModo==='volumes'?'active':''}"><span class="ic">📦</span><span>VOLUMES</span></button>
         </div>
         ${state.qtdModo === 'simples' ? `
           <div class="qtd-control">
@@ -782,29 +796,49 @@ function viewInventariar() {
             <button id="btn-alterar-volumes">ALTERAR</button>
           </div>
         `}
-        ${!state._localExpandida ? `
-          <div class="loc-resumo">
-            <span>📍 ${state.arvore || state.lado ? `Árvore ${state.arvore || '-'} · Lado ${state.lado || '-'}` : 'Nenhuma localização definida'}</span>
-            <button id="btn-editar-local">${state.arvore || state.lado ? 'ALTERAR' : '+ DEFINIR'}</button>
-          </div>
-        ` : `
-          <div style="display:flex;gap:10px;">
-            <div class="field" style="flex:1;"><label>Árvore</label><input id="input-arvore" placeholder="Ex: 1" value="${state.arvore}" /></div>
-            <div class="field" style="flex:1;"><label>Lado</label><input id="input-lado" placeholder="Ex: B" value="${state.lado}" /></div>
-          </div>
-        `}
-        <div class="field" style="margin-top:10px;">
-          <label>Quantidade avariada (opcional)</label>
-          <input id="input-avaria" type="text" inputmode="decimal" placeholder="Ex: 5 — deixe em branco se não houver" value="${state.qtdAvaria}" />
-        </div>
       </div>
       <div class="registrar-fixo">
         <button class="btn btn-lima" id="btn-registrar">REGISTRAR</button>
         <button class="btn btn-ghost" id="btn-cancelar-produto" style="margin-top:6px;">CANCELAR</button>
       </div>
+      ${popupInventariar(inv, rodadaHabilitada)}
     `}
   </div>
   ${tabbar()}`;
+}
+
+function popupInventariar(inv, rodadaHabilitada) {
+  if (!state._popupAberto) return '';
+  let titulo = '', conteudo = '';
+  if (state._popupAberto === 'local') {
+    titulo = 'Localização';
+    conteudo = `
+      <div class="field"><label>Árvore</label><input id="input-arvore" placeholder="Ex: 1" value="${state.arvore}" /></div>
+      <div class="field"><label>Lado</label><input id="input-lado" placeholder="Ex: B" value="${state.lado}" /></div>
+      <button class="btn btn-lima" id="btn-confirmar-popup">CONFIRMAR</button>`;
+  } else if (state._popupAberto === 'avaria') {
+    titulo = 'Avaria';
+    conteudo = `
+      <div class="field"><label>Quantidade avariada</label><input id="input-avaria" type="text" inputmode="decimal" placeholder="Ex: 5 — deixe em branco se não houver" value="${state.qtdAvaria}" /></div>
+      <button class="btn btn-lima" id="btn-confirmar-popup">CONFIRMAR</button>`;
+  } else if (state._popupAberto === 'contagem') {
+    titulo = 'Qual contagem?';
+    conteudo = [1,2,3].map(r => {
+      const habilitada = rodadaHabilitada(r);
+      const atual = state.currentRound === r;
+      return `<button data-escolher-round="${r}" ${habilitada ? '' : 'disabled'} class="btn ${habilitada ? 'btn-lima' : ''} btn-sm" style="width:100%;margin-bottom:10px;${!habilitada ? 'background:#eeeef0;color:#b4b7be;' : ''}">${r}ª CONTAGEM${atual && habilitada ? ' (atual)' : ''}${!habilitada ? ' (bloqueada)' : ''}</button>`;
+    }).join('');
+  }
+  return `
+  <div class="popup-overlay">
+    <div class="popup-card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
+        <h3 style="margin:0;">${titulo}</h3>
+        <button id="btn-fechar-popup" class="popup-close">✕</button>
+      </div>
+      ${conteudo}
+    </div>
+  </div>`;
 }
 
 /* ---- RELATÓRIOS ---- */
@@ -999,11 +1033,6 @@ function bindGlobal() {
   });
   const btnSair = document.getElementById('btn-sair-contagem');
   if (btnSair) btnSair.onclick = () => { state.currentInventoryId = null; state.produtoEncontrado = null; render(); };
-  document.querySelectorAll('[data-round]').forEach(b => b.onclick = () => {
-    if (b.disabled) return;
-    state.currentRound = +b.dataset.round; state.produtoEncontrado = null; render();
-  });
-
   const inputCodigo = document.getElementById('input-codigo');
   const btnBuscar = document.getElementById('btn-buscar-produto');
   const buscar = () => { const val = (inputCodigo?.value || '').trim(); if (val) buscarProduto(val); };
@@ -1040,11 +1069,29 @@ function bindGlobal() {
     if (state.volumeLinhas.length === 0) state.volumeLinhas = [linhaVazia()];
     render();
   });
-  document.getElementById('btn-editar-local')?.addEventListener('click', () => { state._localExpandida = true; render(); });
+  document.querySelectorAll('[data-abrir-popup]').forEach(b => b.onclick = () => { state._popupAberto = b.dataset.abrirPopup; render(); });
+  document.getElementById('btn-fechar-popup')?.addEventListener('click', () => { state._popupAberto = null; render(); });
+  document.getElementById('btn-confirmar-popup')?.addEventListener('click', () => {
+    const inputArvore = document.getElementById('input-arvore');
+    const inputLado = document.getElementById('input-lado');
+    const inputAvaria = document.getElementById('input-avaria');
+    if (inputArvore) state.arvore = inputArvore.value.trim();
+    if (inputLado) state.lado = inputLado.value.trim();
+    if (inputAvaria) state.qtdAvaria = inputAvaria.value.trim();
+    state._popupAberto = null;
+    render();
+  });
+  document.querySelectorAll('[data-escolher-round]').forEach(b => b.onclick = () => {
+    if (b.disabled) return;
+    state.currentRound = +b.dataset.escolherRound;
+    state.produtoEncontrado = null;
+    state._popupAberto = null;
+    render();
+  });
   document.getElementById('input-arvore')?.addEventListener('change', e => { state.arvore = e.target.value.trim(); });
   document.getElementById('input-lado')?.addEventListener('change', e => { state.lado = e.target.value.trim(); });
   document.getElementById('input-avaria')?.addEventListener('change', e => { state.qtdAvaria = e.target.value.trim(); });
-  document.getElementById('btn-cancelar-produto')?.addEventListener('click', () => { state.produtoEncontrado = null; state.qtd = 1; state.arvore = ''; state.lado = ''; state._localExpandida = false; render(); });
+  document.getElementById('btn-cancelar-produto')?.addEventListener('click', () => { state.produtoEncontrado = null; state.qtd = 1; state.arvore = ''; state.lado = ''; state._popupAberto = null; render(); });
   document.getElementById('btn-registrar')?.addEventListener('click', registrarLancamento);
 }
 
@@ -1070,6 +1117,7 @@ function buscarProduto(valor) {
   state.arvore = last.arvore;
   state.lado = last.lado;
   state._localExpandida = false;
+  state._popupAberto = null;
   const qtyCfg = getLastQtyConfig();
   state.qtdModo = qtyCfg.modo || 'simples';
   state.volumeLinhas = state.qtdModo === 'volumes' ? [linhaVazia()] : [];

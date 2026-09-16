@@ -216,6 +216,54 @@ label { font-size: 13px; color: var(--texto-suave); display: block; margin-botto
 .loc-resumo { display: flex; justify-content: space-between; align-items: center; background: var(--branco); border: 1px solid var(--borda); border-radius: 10px; padding: 10px 12px; font-size: 13px; color: var(--texto); margin-bottom: 12px; }
 .loc-resumo button { background: none; border: none; color: var(--azul); font-size: 12px; font-weight: 700; }
 
+.icon-toolbar {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  background: var(--branco);
+  border: 1px solid var(--borda);
+  border-radius: 16px;
+  margin-bottom: 14px;
+  overflow: hidden;
+}
+.icon-toolbar button {
+  background: none;
+  border: none;
+  border-right: 1px solid var(--borda);
+  padding: 14px 4px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--texto);
+}
+.icon-toolbar button:last-child { border-right: none; }
+.icon-toolbar button .ic { font-size: 22px; }
+.icon-toolbar button.active { color: var(--azul-escuro); background: var(--lima); }
+
+.popup-overlay {
+  position: fixed; inset: 0;
+  background: rgba(11, 37, 69, 0.4);
+  z-index: 45;
+  display: flex; align-items: center; justify-content: center;
+}
+.popup-card {
+  background: var(--branco);
+  border-radius: 20px;
+  padding: 22px;
+  width: 82%;
+  max-width: 320px;
+}
+.popup-close {
+  background: var(--fundo);
+  border: none;
+  width: 30px; height: 30px;
+  border-radius: 50%;
+  color: var(--texto-suave);
+  font-size: 14px;
+}
+
 .registrar-fixo {
   position: fixed;
   bottom: 62px;
