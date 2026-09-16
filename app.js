@@ -751,7 +751,7 @@ function viewInventariar() {
         <div class="produto-encontrado-wrap">
           <div class="validado-badge"><span class="check">✓</span><span class="txt">Produto encontrado — confira antes de registrar</span></div>
           <div class="produto-encontrado" style="padding:0 8px 14px;">
-            ${p.temFoto ? `<img src="assets/products/${p.codigo}.png" style="width:190px;height:190px;" />` : `<div class="no-photo" style="width:190px;height:190px;">SEM FOTO</div>`}
+            ${p.temFoto ? `<img src="assets/products/${p.codigo}.png" style="width:140px;height:140px;" />` : `<div class="no-photo" style="width:140px;height:140px;">SEM FOTO</div>`}
             <div style="display:flex;align-items:baseline;justify-content:center;gap:8px;">
               <span class="cod-pill">CÓD. ${p.codigo}</span><span style="font-size:19px;color:var(--azul-escuro);font-weight:800;">${p.referencia}</span>
             </div>
@@ -766,34 +766,10 @@ function viewInventariar() {
           <div class="qtd-control">
             <button id="qtd-menos">−</button><input id="qtd-input" type="number" value="${state.qtd}" /><button id="qtd-mais">+</button>
           </div>
-        ` : state._volumesExpandida ? `
-          <div class="card" style="margin-bottom:12px;">
-            <div class="meta" style="margin-bottom:10px;">Uma linha por combinação — deixe "Unidade" em branco quando for só peça solta.</div>
-            <div style="display:flex;gap:8px;margin-bottom:4px;">
-              <div style="flex:1;font-size:11px;color:var(--texto-suave);font-weight:600;">VOLUME</div>
-              <div style="width:14px;"></div>
-              <div style="flex:1;font-size:11px;color:var(--texto-suave);font-weight:600;">UNIDADE</div>
-              <div style="width:26px;"></div>
-            </div>
-            ${state.volumeLinhas.map((linha, i) => `
-              <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;">
-                <input data-linha-idx="${i}" data-campo="qtd" type="text" inputmode="decimal" placeholder="Ex: 22" value="${linha.qtd}" style="flex:1;min-width:0;" />
-                <span style="color:var(--texto-suave);font-weight:700;">×</span>
-                <input data-linha-idx="${i}" data-campo="pecas" type="text" inputmode="decimal" placeholder="Ex: 12 (opcional)" value="${linha.pecas}" style="flex:1;min-width:0;" />
-                <button data-remover-linha="${i}" style="background:none;border:none;color:var(--vermelho);font-size:18px;padding:0 4px;">✕</button>
-              </div>
-            `).join('')}
-            <button class="btn btn-outline btn-sm" id="btn-add-linha" style="width:100%;margin-bottom:10px;">+ ADICIONAR LINHA</button>
-            <div style="text-align:center;background:var(--azul-claro);border-radius:10px;padding:10px;margin-bottom:12px;">
-              <div style="font-size:11px;color:var(--texto-suave);">TOTAL CALCULADO</div>
-              <div style="font-size:24px;font-weight:800;color:var(--azul-escuro);">${formatNumeroBR(calcularTotalVolumes())}</div>
-            </div>
-            <button class="btn btn-primary" id="btn-confirmar-volumes">CONFIRMAR CÁLCULO</button>
-          </div>
         ` : `
           <div class="loc-resumo" style="margin-bottom:12px;">
             <span>📦 Total por volumes: <b>${formatNumeroBR(calcularTotalVolumes())}</b></span>
-            <button id="btn-alterar-volumes">ALTERAR</button>
+            <button data-abrir-popup="volumes">${calcularTotalVolumes() > 0 ? 'ALTERAR' : '+ DEFINIR'}</button>
           </div>
         `}
       </div>
@@ -828,6 +804,30 @@ function popupInventariar(inv, rodadaHabilitada) {
       const atual = state.currentRound === r;
       return `<button data-escolher-round="${r}" ${habilitada ? '' : 'disabled'} class="btn ${habilitada ? 'btn-lima' : ''} btn-sm" style="width:100%;margin-bottom:10px;${!habilitada ? 'background:#eeeef0;color:#b4b7be;' : ''}">${r}ª CONTAGEM${atual && habilitada ? ' (atual)' : ''}${!habilitada ? ' (bloqueada)' : ''}</button>`;
     }).join('');
+  } else if (state._popupAberto === 'volumes') {
+    titulo = 'Por volumes';
+    conteudo = `
+      <div class="meta" style="margin-bottom:10px;">Uma linha por combinação — deixe "Unidade" em branco quando for só peça solta.</div>
+      <div style="display:flex;gap:8px;margin-bottom:4px;">
+        <div style="flex:1;font-size:11px;color:var(--texto-suave);font-weight:600;">VOLUME</div>
+        <div style="width:14px;"></div>
+        <div style="flex:1;font-size:11px;color:var(--texto-suave);font-weight:600;">UNIDADE</div>
+        <div style="width:26px;"></div>
+      </div>
+      ${state.volumeLinhas.map((linha, i) => `
+        <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;">
+          <input data-linha-idx="${i}" data-campo="qtd" type="text" inputmode="decimal" placeholder="Ex: 22" value="${linha.qtd}" style="flex:1;min-width:0;" />
+          <span style="color:var(--texto-suave);font-weight:700;">×</span>
+          <input data-linha-idx="${i}" data-campo="pecas" type="text" inputmode="decimal" placeholder="Ex: 12 (opcional)" value="${linha.pecas}" style="flex:1;min-width:0;" />
+          <button data-remover-linha="${i}" style="background:none;border:none;color:var(--vermelho);font-size:18px;padding:0 4px;">✕</button>
+        </div>
+      `).join('')}
+      <button class="btn btn-outline btn-sm" id="btn-add-linha" style="width:100%;margin-bottom:10px;">+ ADICIONAR LINHA</button>
+      <div style="text-align:center;background:var(--azul-claro);border-radius:10px;padding:10px;margin-bottom:12px;">
+        <div style="font-size:11px;color:var(--texto-suave);">TOTAL CALCULADO</div>
+        <div style="font-size:24px;font-weight:800;color:var(--azul-escuro);">${formatNumeroBR(calcularTotalVolumes())}</div>
+      </div>
+      <button class="btn btn-lima" id="btn-confirmar-volumes">CONFIRMAR</button>`;
   }
   return `
   <div class="popup-overlay">
@@ -1047,16 +1047,17 @@ function bindGlobal() {
   document.getElementById('qtd-input')?.addEventListener('change', e => { state.qtd = Math.max(1, +e.target.value || 1); });
   document.querySelectorAll('[data-qtdmodo]').forEach(b => b.onclick = () => {
     state.qtdModo = b.dataset.qtdmodo;
-    if (state.qtdModo === 'volumes' && state.volumeLinhas.length === 0) state.volumeLinhas = [linhaVazia()];
-    state._volumesExpandida = true;
+    if (state.qtdModo === 'volumes') {
+      if (state.volumeLinhas.length === 0) state.volumeLinhas = [linhaVazia()];
+      state._popupAberto = 'volumes';
+    }
     saveLastQtyConfig(state.qtdModo);
     render();
   });
   document.getElementById('btn-confirmar-volumes')?.addEventListener('click', () => {
     if (calcularTotalVolumes() <= 0) { showToast('Preencha as linhas antes de confirmar.', true); return; }
-    state._volumesExpandida = false; render();
+    state._popupAberto = null; render();
   });
-  document.getElementById('btn-alterar-volumes')?.addEventListener('click', () => { state._volumesExpandida = true; render(); });
   document.querySelectorAll('[data-linha-idx]').forEach(inp => inp.addEventListener('change', e => {
     const idx = +inp.dataset.linhaIdx;
     state.volumeLinhas[idx][inp.dataset.campo] = e.target.value;
