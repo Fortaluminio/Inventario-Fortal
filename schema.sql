@@ -123,6 +123,9 @@ create policy "ler correcoes" on corrections for select using (auth.role() = 'au
 create policy "corrigir - gerenciar" on corrections for insert with check (
   exists (select 1 from profiles where id = auth.uid() and role = 'gerenciar')
 );
+create policy "excluir correcao - gerenciar" on corrections for delete using (
+  exists (select 1 from profiles where id = auth.uid() and role = 'gerenciar')
+);
 
 -- ============================================================
 -- Tempo real: permite que todos os celulares vejam mudanças ao vivo

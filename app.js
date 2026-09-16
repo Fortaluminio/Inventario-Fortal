@@ -206,6 +206,13 @@ async function salvarCorrecaoSupabase(inventoryId, codigo, round, oldTotal, newT
   await refreshInventories();
 }
 
+async function excluirCorrecaoSupabase(correctionId) {
+  const { error } = await sb.from('corrections').delete().eq('id', correctionId);
+  if (error) { showToast('Erro ao excluir correção: ' + error.message, true); return false; }
+  await refreshInventories();
+  return true;
+}
+
 async function atualizarEtapaSupabase(inventoryId, patch) {
   const { error } = await sb.from('inventories').update(patch).eq('id', inventoryId);
   if (error) { showToast('Erro: ' + error.message, true); return; }
@@ -665,10 +672,20 @@ function modalCorrecao(inv) {
         </table>
         <div class="meta" style="margin-top:-10px;margin-bottom:16px;">✓ = lançamento da 3ª contagem que está valendo (mais recente — a 3ª é soberana, não soma).</div>
       ` : ''}
+      ${p ? (() => {
+        const correcoesDoProduto = inv.corrections.filter(c => c.codigo === p.codigo).sort((a, b) => a.round - b.round);
+        if (!correcoesDoProduto.length) return '';
+        return `
+        <div class="meta" style="font-weight:600;margin-bottom:6px;">Correções feitas (sobrescrevem os lançamentos)</div>
+        <table class="report" style="margin-bottom:16px;">
+          <tr><th>Cont.</th><th>Novo total</th><th>Motivo</th><th>Quem</th><th></th></tr>
+          ${correcoesDoProduto.map(c => `<tr><td>${c.round}ª</td><td><b>${formatNumeroBR(c.newTotal)}</b></td><td>${c.reason || '-'}</td><td>${c.userName || '-'}</td><td><button data-excluir-correcao="${c.id}" style="background:none;border:none;color:var(--vermelho);font-size:15px;padding:0 4px;" title="Excluir esta correção">✕</button></td></tr>`).join('')}
+        </table>
+      `; })() : ''}
       <div class="field">
         <label>Qual contagem corrigir?</label>
         <div class="tabs-inline" style="margin-bottom:0;">
-          ${[1,2,3].map(r => `<button data-corr-round="${r}" class="${round===r?'active':''}">${r}ª CONTAGEM</button>`).join('')}
+          ${[1,2,3].filter(r => roundHasData(inv, p.codigo, r) || inv.roundClosed[r]).map(r => `<button data-corr-round="${r}" class="${round===r?'active':''}">${r}ª CONTAGEM</button>`).join('')}
         </div>
       </div>
       ${lancamentos.some(e => e.round === round) ? `<button class="btn btn-ghost" style="color:var(--vermelho);margin-bottom:10px;" id="btn-excluir-todos-rodada">EXCLUIR TODOS OS LANÇAMENTOS DA ${round}ª CONTAGEM (só deste produto)</button>` : ''}
@@ -963,6 +980,11 @@ function bindGlobal() {
     await excluirLancamentoSupabase(b.dataset.excluirLancamento);
     render();
   });
+  document.querySelectorAll('[data-excluir-correcao]').forEach(b => b.onclick = async () => {
+    if (!confirm('Excluir esta correção? A contagem volta a valer pela soma dos lançamentos.')) return;
+    await excluirCorrecaoSupabase(b.dataset.excluirCorrecao);
+    render();
+  });
   const btnExcluirTodosRodada = document.getElementById('btn-excluir-todos-rodada');
   if (btnExcluirTodosRodada) btnExcluirTodosRodada.onclick = async () => {
     const round = state._corrigirRound || 1;
@@ -1088,7 +1110,7 @@ async function registrarLancamento() {
   if (state.currentRound === 3) {
     const s = productStatus(currentInventory(), p.codigo);
     if (s.status === 'DIVERGÊNCIA CRÍTICA') {
-      alertaDivergencia = `⚠ Esta contagem ainda não bate com nenhuma das anteriores. Avise o gerente — o inventário não finaliza assim.`;
+      alertaDivergencia = `✓ Lançamento registrado. ⚠ Mas esta contagem ainda não bate com nenhuma das anteriores — avise o gerente.`;
     }
   }
 
