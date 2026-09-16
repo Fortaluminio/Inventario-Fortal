@@ -166,11 +166,13 @@ label { font-size: 13px; color: var(--texto-suave); display: block; margin-botto
   flex: 1;
   background: none;
   border: none;
+  border-right: 1px solid var(--borda);
   padding: 10px 4px 8px;
   font-size: 11px;
   color: var(--texto-suave);
   display: flex; flex-direction: column; align-items: center; gap: 4px;
 }
+.tabbar button:last-child { border-right: none; }
 .tabbar button.active { color: var(--lima-escuro); font-weight: 700; }
 .tabbar .ic { font-size: 20px; }
 
@@ -191,7 +193,7 @@ label { font-size: 13px; color: var(--texto-suave); display: block; margin-botto
   flex-direction: column;
   align-items: center;
   text-align: center;
-  gap: 10px;
+  gap: 6px;
 }
 .produto-encontrado img, .produto-encontrado .no-photo {
   width: 140px; height: 140px;
@@ -208,7 +210,7 @@ label { font-size: 13px; color: var(--texto-suave); display: block; margin-botto
 .btn-lima { background: var(--lima); color: var(--azul-escuro); }
 
 .produto-encontrado-wrap { border: 2.5px solid var(--verde); border-radius: 18px; padding: 4px; background: var(--branco); }
-.validado-badge { background: var(--verde-bg); border-radius: 14px; padding: 8px 12px; display: flex; align-items: center; gap: 6px; margin-bottom: 12px; }
+.validado-badge { background: var(--verde-bg); border-radius: 14px; padding: 7px 10px; display: flex; align-items: center; gap: 6px; margin-bottom: 8px; }
 .validado-badge .check { width: 20px; height: 20px; border-radius: 50%; background: var(--verde); color: #fff; font-size: 13px; font-weight: 800; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
 .validado-badge .txt { color: var(--verde); font-size: 12px; font-weight: 700; }
 .cod-pill { background: var(--azul-escuro); color: #fff; font-size: 12px; font-weight: 700; padding: 3px 10px; border-radius: 20px; }
@@ -221,25 +223,25 @@ label { font-size: 13px; color: var(--texto-suave); display: block; margin-botto
   grid-template-columns: repeat(3, 1fr);
   background: var(--branco);
   border: 1px solid var(--borda);
-  border-radius: 16px;
-  margin-bottom: 14px;
+  border-radius: 14px;
+  margin-bottom: 8px;
   overflow: hidden;
 }
 .icon-toolbar button {
   background: none;
   border: none;
   border-right: 1.5px solid var(--borda);
-  padding: 9px 4px;
+  padding: 7px 4px;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 4px;
+  gap: 3px;
   font-size: 9px;
   font-weight: 700;
   color: var(--texto);
 }
 .icon-toolbar button:last-child { border-right: none; }
-.icon-toolbar button .ic { font-size: 17px; }
+.icon-toolbar button .ic { font-size: 16px; }
 .icon-toolbar button.active { color: var(--azul-escuro); background: var(--lima); }
 
 .popup-overlay {
@@ -268,17 +270,17 @@ label { font-size: 13px; color: var(--texto-suave); display: block; margin-botto
 
 .registrar-fixo {
   position: fixed;
-  bottom: 62px;
+  bottom: 58px;
   left: 50%;
   transform: translateX(-50%);
   width: 100%;
   max-width: 480px;
   background: var(--fundo);
-  padding: 10px 16px calc(10px + env(safe-area-inset-bottom));
+  padding: 8px 16px calc(8px + env(safe-area-inset-bottom));
   border-top: 1px solid var(--borda);
   z-index: 9;
 }
-.qtd-control { display: flex; align-items: center; gap: 14px; justify-content: center; margin: 18px 0; }
+.qtd-control { display: flex; align-items: center; gap: 14px; justify-content: center; margin: 10px 0; }
 .qtd-control button {
   width: 40px; height: 40px; border-radius: 50%; border: none;
   background: var(--azul-claro); color: var(--azul); font-size: 20px; font-weight: 700; flex-shrink: 0;

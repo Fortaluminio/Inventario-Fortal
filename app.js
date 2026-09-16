@@ -742,7 +742,7 @@ function viewInventariar() {
       <button class="btn btn-primary" id="btn-buscar-produto">BUSCAR</button>
       ${popupInventariar(inv, rodadaHabilitada)}
     ` : `
-      <div style="padding-bottom:96px;">
+      <div style="padding-bottom:76px;">
         <div class="icon-toolbar">
           <button data-abrir-popup="local"><span class="ic">📌</span><span>Local</span></button>
           <button data-abrir-popup="avaria"><span class="ic">⚠️</span><span>Avaria</span></button>
@@ -773,9 +773,9 @@ function viewInventariar() {
           </div>
         `}
       </div>
-      <div class="registrar-fixo">
-        <button class="btn btn-lima" id="btn-registrar">REGISTRAR</button>
-        <button class="btn btn-ghost" id="btn-cancelar-produto" style="margin-top:6px;">CANCELAR</button>
+      <div class="registrar-fixo" style="display:flex;gap:10px;">
+        <button class="btn btn-lima" id="btn-registrar" style="flex:2;">REGISTRAR</button>
+        <button class="btn btn-outline" id="btn-cancelar-produto" style="flex:1;">CANCELAR</button>
       </div>
       ${popupInventariar(inv, rodadaHabilitada)}
     `}
