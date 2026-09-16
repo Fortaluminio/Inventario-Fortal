@@ -312,7 +312,7 @@ function productStatus(inv, codigo) {
 function inventoryProgress(inv, round) {
   if (round === 3) {
     const divergentes = divergentProducts(inv);
-    if (divergentes.length === 0) return 100;
+    if (divergentes.length === 0) return inv.roundClosed[2] ? 100 : 0;
     const contados = divergentes.filter(p => roundHasData(inv, p.codigo, 3)).length;
     return Math.round((contados / divergentes.length) * 100);
   }
