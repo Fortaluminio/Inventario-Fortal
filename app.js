@@ -751,7 +751,7 @@ function viewInventariar() {
         <div class="produto-encontrado-wrap">
           <div class="validado-badge"><span class="check">✓</span><span class="txt">Produto encontrado — confira antes de registrar</span></div>
           <div class="produto-encontrado" style="padding:0 8px 14px;">
-            ${p.temFoto ? `<img src="assets/products/${p.codigo}.png" style="width:140px;height:140px;" />` : `<div class="no-photo" style="width:140px;height:140px;">SEM FOTO</div>`}
+            ${p.temFoto ? `<img src="assets/products/${p.codigo}.png" style="width:165px;height:165px;" />` : `<div class="no-photo" style="width:165px;height:165px;">SEM FOTO</div>`}
             <div style="display:flex;align-items:baseline;justify-content:center;gap:8px;">
               <span class="cod-pill">CÓD. ${p.codigo}</span><span style="font-size:19px;color:var(--azul-escuro);font-weight:800;">${p.referencia}</span>
             </div>

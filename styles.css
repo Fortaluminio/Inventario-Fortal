@@ -174,7 +174,7 @@ label { font-size: 13px; color: var(--texto-suave); display: block; margin-botto
 }
 .tabbar button:last-child { border-right: none; }
 .tabbar button.active { color: var(--lima-escuro); font-weight: 700; }
-.tabbar .ic { font-size: 20px; }
+.tabbar .ic { font-size: 24px; }
 
 /* Tela inventariar */
 .scan-box {
@@ -193,10 +193,10 @@ label { font-size: 13px; color: var(--texto-suave); display: block; margin-botto
   flex-direction: column;
   align-items: center;
   text-align: center;
-  gap: 6px;
+  gap: 9px;
 }
 .produto-encontrado img, .produto-encontrado .no-photo {
-  width: 140px; height: 140px;
+  width: 165px; height: 165px;
   border-radius: 16px;
   object-fit: contain;
   background: var(--azul-claro);
@@ -231,17 +231,17 @@ label { font-size: 13px; color: var(--texto-suave); display: block; margin-botto
   background: none;
   border: none;
   border-right: 1.5px solid var(--borda);
-  padding: 7px 4px;
+  padding: 11px 4px;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 3px;
-  font-size: 9px;
+  gap: 5px;
+  font-size: 10px;
   font-weight: 700;
   color: var(--texto);
 }
 .icon-toolbar button:last-child { border-right: none; }
-.icon-toolbar button .ic { font-size: 16px; }
+.icon-toolbar button .ic { font-size: 25px; }
 .icon-toolbar button.active { color: var(--azul-escuro); background: var(--lima); }
 
 .popup-overlay {
