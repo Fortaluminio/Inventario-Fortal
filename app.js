@@ -913,7 +913,12 @@ function bindGlobal() {
 
   document.querySelectorAll('[data-corrigir]').forEach(tr => tr.onclick = () => {
     if (currentProfile.role !== 'gerenciar') return;
-    state._corrigirCodigo = tr.dataset.corrigir; state._corrigirRound = 1; render();
+    const inv = currentInventory();
+    const c3 = roundHasData(inv, tr.dataset.corrigir, 3);
+    const c2 = roundHasData(inv, tr.dataset.corrigir, 2);
+    state._corrigirCodigo = tr.dataset.corrigir;
+    state._corrigirRound = c3 ? 3 : c2 ? 2 : 1;
+    render();
   });
   document.querySelectorAll('[data-corr-round]').forEach(b => b.onclick = () => {
     state._corrigirRound = +b.dataset.corrRound; render();
