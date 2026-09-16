@@ -178,6 +178,14 @@ async function excluirLancamentoSupabase(entryId) {
   return true;
 }
 
+async function excluirTodosLancamentosRodada(inventoryId, codigo, round) {
+  const { error } = await sb.from('count_entries').delete()
+    .eq('inventory_id', inventoryId).eq('codigo', codigo).eq('round', round);
+  if (error) { showToast('Erro ao excluir: ' + error.message, true); return false; }
+  await refreshInventories();
+  return true;
+}
+
 async function registrarLancamentoSupabase(inventoryId, codigo, round, quantity, arvore, lado, detalheContagem, qtdAvaria) {
   const { error } = await sb.from('count_entries').insert({
     inventory_id: inventoryId, codigo, round, quantity, arvore: arvore || null, lado: lado || null,
@@ -236,7 +244,15 @@ function melhorQuantidade(inv, codigo) {
 }
 
 function roundTotal(inv, codigo, round) {
-  return inv.entries.filter(e => e.codigo === codigo && e.round === round).reduce((s, e) => s + e.quantity, 0);
+  const entradas = inv.entries.filter(e => e.codigo === codigo && e.round === round);
+  if (round === 3) {
+    // 3ª contagem é soberana: o lançamento mais recente vale como valor
+    // final dessa contagem, não soma com tentativas anteriores.
+    if (entradas.length === 0) return 0;
+    const maisRecente = entradas.reduce((a, b) => new Date(a.timestamp) > new Date(b.timestamp) ? a : b);
+    return maisRecente.quantity;
+  }
+  return entradas.reduce((s, e) => s + e.quantity, 0);
 }
 
 function effectiveRoundTotal(inv, codigo, round) {
@@ -642,8 +658,12 @@ function modalCorrecao(inv) {
         <div class="meta" style="font-weight:600;margin-bottom:6px;">Onde foi contado</div>
         <table class="report" style="margin-bottom:16px;">
           <tr><th>Cont.</th><th>Qtd</th><th>Como</th><th>Avaria</th><th>Árvore</th><th>Lado</th><th>Quem</th><th></th></tr>
-          ${lancamentos.map(e => `<tr><td>${e.round}ª</td><td>${formatNumeroBR(e.quantity)}</td><td>${formatarDetalhe(e.detalheContagem)}</td><td>${e.qtdAvaria ? formatNumeroBR(e.qtdAvaria) : '-'}</td><td>${e.arvore || '-'}</td><td>${e.lado || '-'}</td><td>${e.userName || '-'}</td><td><button data-excluir-lancamento="${e.id}" style="background:none;border:none;color:var(--vermelho);font-size:15px;padding:0 4px;" title="Excluir este lançamento">✕</button></td></tr>`).join('')}
+          ${lancamentos.map(e => {
+            const maisRecenteDaRodada3 = e.round === 3 && lancamentos.filter(x => x.round === 3).reduce((a, b) => new Date(a.timestamp) > new Date(b.timestamp) ? a : b).id === e.id;
+            return `<tr style="${maisRecenteDaRodada3 ? 'background:var(--verde-bg);' : ''}"><td>${e.round}ª${maisRecenteDaRodada3 ? ' ✓' : ''}</td><td>${formatNumeroBR(e.quantity)}</td><td>${formatarDetalhe(e.detalheContagem)}</td><td>${e.qtdAvaria ? formatNumeroBR(e.qtdAvaria) : '-'}</td><td>${e.arvore || '-'}</td><td>${e.lado || '-'}</td><td>${e.userName || '-'}</td><td><button data-excluir-lancamento="${e.id}" style="background:none;border:none;color:var(--vermelho);font-size:15px;padding:0 4px;" title="Excluir este lançamento">✕</button></td></tr>`;
+          }).join('')}
         </table>
+        <div class="meta" style="margin-top:-10px;margin-bottom:16px;">✓ = lançamento da 3ª contagem que está valendo (mais recente — a 3ª é soberana, não soma).</div>
       ` : ''}
       <div class="field">
         <label>Qual contagem corrigir?</label>
@@ -651,6 +671,7 @@ function modalCorrecao(inv) {
           ${[1,2,3].map(r => `<button data-corr-round="${r}" class="${round===r?'active':''}">${r}ª CONTAGEM</button>`).join('')}
         </div>
       </div>
+      ${lancamentos.some(e => e.round === round) ? `<button class="btn btn-ghost" style="color:var(--vermelho);margin-bottom:10px;" id="btn-excluir-todos-rodada">EXCLUIR TODOS OS LANÇAMENTOS DA ${round}ª CONTAGEM (só deste produto)</button>` : ''}
       <div class="field"><label>Novo total da ${round}ª contagem</label><input id="corr-novo-total" type="number" value="${totalAtualRound}" /></div>
       <div class="field"><label>Motivo da correção</label><input id="corr-motivo" placeholder="Ex: erro de digitação" /></div>
       <button class="btn btn-primary" id="btn-salvar-correcao">SALVAR CORREÇÃO</button>
@@ -942,6 +963,14 @@ function bindGlobal() {
     await excluirLancamentoSupabase(b.dataset.excluirLancamento);
     render();
   });
+  const btnExcluirTodosRodada = document.getElementById('btn-excluir-todos-rodada');
+  if (btnExcluirTodosRodada) btnExcluirTodosRodada.onclick = async () => {
+    const round = state._corrigirRound || 1;
+    if (!confirm(`Excluir TODOS os lançamentos da ${round}ª contagem deste produto? Essa ação não pode ser desfeita.`)) return;
+    const inv = currentInventory();
+    await excluirTodosLancamentosRodada(inv.id, state._corrigirCodigo, round);
+    render();
+  };
 
   document.querySelectorAll('[data-select-count-inv]').forEach(c => c.onclick = () => {
     state.currentInventoryId = c.dataset.selectCountInv; state.currentRound = 1; state.produtoEncontrado = null; render();
