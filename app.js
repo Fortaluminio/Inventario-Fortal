@@ -276,7 +276,7 @@ function roundHasData(inv, codigo, round) {
 function productStatus(inv, codigo) {
   const t1 = effectiveRoundTotal(inv, codigo, 1);
   const t2 = effectiveRoundTotal(inv, codigo, 2);
-  const t3 = effectiveRoundTotal(inv, codigo, 3);
+  let t3 = effectiveRoundTotal(inv, codigo, 3);
   const c1 = roundHasData(inv, codigo, 1);
   const c2 = roundHasData(inv, codigo, 2);
   const c3 = roundHasData(inv, codigo, 3);
@@ -291,7 +291,7 @@ function productStatus(inv, codigo) {
   } else if (!inv.roundClosed[2]) {
     status = 'EM CONTAGEM (2ª)';
   } else if (t1 === t2) {
-    status = 'FINALIZADO'; final = t1;
+    status = 'FINALIZADO'; final = t1; t3 = t1;
   } else if (!c3) {
     status = 'AGUARDANDO 3ª';
   } else if (t3 !== t1 && t3 !== t2) {

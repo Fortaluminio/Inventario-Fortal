@@ -1,4 +1,4 @@
-const CACHE = 'inventario-fortal-v38';
+const CACHE = 'inventario-fortal-v39';
 const CORE = [
   './', './index.html', './styles.css', './app.js', './config.js', './manifest.webmanifest',
   './data/products.json', './icons/icon-192.png', './icons/icon-512.png'
