@@ -326,6 +326,17 @@ function divergentProducts(inv) {
   return inv.products.filter(p => productStatus(inv, p.codigo).divergente);
 }
 
+function rodadaHabilitada(inv, r) {
+  return inv.roundOpen[r] || (r === 1 && !inv.roundClosed[1]);
+}
+
+function rodadaAbertaAtual(inv) {
+  for (const r of [1, 2, 3]) {
+    if (rodadaHabilitada(inv, r)) return r;
+  }
+  return 1;
+}
+
 function produtosDivergenciaCritica(inv) {
   return inv.products.filter(p => productStatus(inv, p.codigo).alertaCritico);
 }
@@ -388,7 +399,7 @@ const state = {
   currentInventoryId: null,
   currentRound: 1,
   produtoEncontrado: null,
-  qtd: 1,
+  qtd: 0,
   qtdModo: 'simples',
   qtdAvaria: '',
   volumeLinhas: [],
@@ -1029,7 +1040,10 @@ function bindGlobal() {
   };
 
   document.querySelectorAll('[data-select-count-inv]').forEach(c => c.onclick = () => {
-    state.currentInventoryId = c.dataset.selectCountInv; state.currentRound = 1; state.produtoEncontrado = null; render();
+    const inv = inventoriesCache.find(i => i.id === c.dataset.selectCountInv);
+    state.currentInventoryId = c.dataset.selectCountInv;
+    state.currentRound = inv ? rodadaAbertaAtual(inv) : 1;
+    state.produtoEncontrado = null; render();
   });
   const btnSair = document.getElementById('btn-sair-contagem');
   if (btnSair) btnSair.onclick = () => { state.currentInventoryId = null; state.produtoEncontrado = null; render(); };
@@ -1042,9 +1056,9 @@ function bindGlobal() {
   const btnAbrirCamera = document.getElementById('btn-abrir-camera');
   if (btnAbrirCamera) btnAbrirCamera.onclick = iniciarScanner;
 
-  document.getElementById('qtd-menos')?.addEventListener('click', () => { state.qtd = Math.max(1, state.qtd - 1); render(); });
+  document.getElementById('qtd-menos')?.addEventListener('click', () => { state.qtd = Math.max(0, state.qtd - 1); render(); });
   document.getElementById('qtd-mais')?.addEventListener('click', () => { state.qtd = state.qtd + 1; render(); });
-  document.getElementById('qtd-input')?.addEventListener('change', e => { state.qtd = Math.max(1, +e.target.value || 1); });
+  document.getElementById('qtd-input')?.addEventListener('change', e => { state.qtd = Math.max(0, +e.target.value || 0); });
   document.querySelectorAll('[data-qtdmodo]').forEach(b => b.onclick = () => {
     state.qtdModo = b.dataset.qtdmodo;
     if (state.qtdModo === 'volumes') {
@@ -1092,13 +1106,17 @@ function bindGlobal() {
   document.getElementById('input-arvore')?.addEventListener('change', e => { state.arvore = e.target.value.trim(); });
   document.getElementById('input-lado')?.addEventListener('change', e => { state.lado = e.target.value.trim(); });
   document.getElementById('input-avaria')?.addEventListener('change', e => { state.qtdAvaria = e.target.value.trim(); });
-  document.getElementById('btn-cancelar-produto')?.addEventListener('click', () => { state.produtoEncontrado = null; state.qtd = 1; state.arvore = ''; state.lado = ''; state._popupAberto = null; render(); });
+  document.getElementById('btn-cancelar-produto')?.addEventListener('click', () => { state.produtoEncontrado = null; state.qtd = 0; state.arvore = ''; state.lado = ''; state._popupAberto = null; render(); });
   document.getElementById('btn-registrar')?.addEventListener('click', registrarLancamento);
 }
 
 function buscarProduto(valor) {
   const inv = currentInventory();
   if (!inv) return;
+  if (!rodadaHabilitada(inv, state.currentRound)) {
+    showToast(`A ${state.currentRound}ª contagem não está mais aberta. Toque no ícone de Contagem e escolha a etapa certa.`, true);
+    return;
+  }
   let codigo = valor;
   if (/^\d{12}$/.test(valor) && valor.startsWith('20')) codigo = String(parseInt(valor.slice(2), 10));
   const produto = inv.products.find(p => p.codigo === codigo);
@@ -1113,7 +1131,7 @@ function buscarProduto(valor) {
     return;
   }
   state.produtoEncontrado = produto;
-  state.qtd = 1;
+  state.qtd = 0;
   const last = getLastLocation();
   state.arvore = last.arvore;
   state.lado = last.lado;
@@ -1131,6 +1149,11 @@ async function registrarLancamento() {
   const inv = currentInventory();
   const p = state.produtoEncontrado;
   if (!inv || !p) return;
+  if (!rodadaHabilitada(inv, state.currentRound)) {
+    showToast(`A ${state.currentRound}ª contagem não está mais aberta. Escolha a etapa certa e tente de novo.`, true);
+    state.produtoEncontrado = null; render();
+    return;
+  }
 
   let quantidade, detalheContagem = null;
   if (state.qtdModo === 'volumes') {
@@ -1141,6 +1164,7 @@ async function registrarLancamento() {
       .map(l => ({ qtd: parseFloat(String(l.qtd).replace(',', '.')) || 0, pecas: l.pecas !== '' ? (parseFloat(String(l.pecas).replace(',', '.')) || 0) : null }));
   } else {
     quantidade = state.qtd;
+    if (quantidade <= 0) { showToast('Informe uma quantidade maior que zero.', true); return; }
   }
 
   const arvore = (state.arvore || '').trim();
@@ -1163,7 +1187,7 @@ async function registrarLancamento() {
     }
   }
 
-  state.produtoEncontrado = null; state.qtd = 1; state.arvore = ''; state.lado = ''; state._localExpandida = false;
+  state.produtoEncontrado = null; state.qtd = 0; state.arvore = ''; state.lado = ''; state._localExpandida = false;
   state.qtdAvaria = '';
   state.volumeLinhas = state.qtdModo === 'volumes' ? [linhaVazia()] : [];
   state._volumesExpandida = true;
@@ -1213,20 +1237,45 @@ function downloadTxt(filename, content) {
   URL.revokeObjectURL(url);
 }
 
+function produtosDaContagemParaExport(inv, round) {
+  if (round === 3) {
+    return inv.products
+      .map(p => {
+        const s = productStatus(inv, p.codigo);
+        const entradas = inv.entries.filter(e => e.codigo === p.codigo && e.round === 3);
+        const avaria = entradas.reduce((soma, e) => soma + (e.qtdAvaria || 0), 0);
+        const locs = [...new Set(entradas.filter(e => e.arvore || e.lado).map(e => `${e.arvore || '-'}/${e.lado || '-'}`))].join('; ');
+        const detalhes = entradas.length
+          ? entradas.map(e => e.detalheContagem ? formatarDetalhe(e.detalheContagem) : formatNumeroBR(e.quantity)).join(' | ')
+          : (s.t1 === s.t2 ? 'igual à 1ª/2ª (automático)' : '-');
+        return { produto: p, quantidade: s.t3, avaria, locs, detalhes };
+      })
+      .filter(x => x.quantidade);
+  }
+  return inv.products
+    .filter(p => inv.entries.some(e => e.codigo === p.codigo && e.round === round))
+    .map(p => {
+      const entradas = inv.entries.filter(e => e.codigo === p.codigo && e.round === round);
+      const quantidade = entradas.reduce((soma, e) => soma + e.quantity, 0);
+      const avaria = entradas.reduce((soma, e) => soma + (e.qtdAvaria || 0), 0);
+      const locs = [...new Set(entradas.filter(e => e.arvore || e.lado).map(e => `${e.arvore || '-'}/${e.lado || '-'}`))].join('; ');
+      const detalhes = entradas.map(e => e.detalheContagem ? formatarDetalhe(e.detalheContagem) : formatNumeroBR(e.quantity)).join(' | ');
+      return { produto: p, quantidade, avaria, locs, detalhes };
+    });
+}
+
 function exportTxtRotina1147(inv, round) {
   if (!inv) return;
-  const produtosDaContagem = inv.products.filter(p => inv.entries.some(e => e.codigo === p.codigo && e.round === round));
-  if (produtosDaContagem.length === 0) { showToast(`Não há lançamentos na ${round}ª contagem ainda.`, true); return; }
+  const itens = produtosDaContagemParaExport(inv, round);
+  if (itens.length === 0) { showToast(`Não há itens na ${round}ª contagem ainda.`, true); return; }
 
-  const linhas = produtosDaContagem.map(p => {
-    const entradas = inv.entries.filter(e => e.codigo === p.codigo && e.round === round);
-    const total = entradas.reduce((soma, e) => soma + e.quantity, 0);
+  const linhas = itens.map(({ produto: p, quantidade }) => {
     const codBarras = String(p.codigo).padStart(14, '0');
     const codProd = String(p.codigo).padStart(6, '0');
     const numInventario = String(inv.numero).padStart(6, '0');
     const contagem = String(round).padStart(4, '0');
-    const quantidade = total.toFixed(1).replace('.', ',').padStart(6, '0');
-    return codBarras + codProd + numInventario + contagem + quantidade;
+    const qtd = quantidade.toFixed(1).replace('.', ',').padStart(6, '0');
+    return codBarras + codProd + numInventario + contagem + qtd;
   });
 
   downloadTxt(`inventario_${inv.numero}_${round}a_contagem_rotina1147.txt`, linhas.join('\r\n'));
@@ -1245,16 +1294,11 @@ function exportLancamentosCsv(inv) {
 function exportLancamentosPorContagem(inv, round) {
   if (!inv) return;
   const rows = [['CODPROD','REFERENCIA','DESCRICAO','QUANTIDADE','NUMINVENTARIO','LOCALIZACOES','DETALHAMENTO','QTD_AVARIA']];
-  const produtosDaContagem = inv.products.filter(p => inv.entries.some(e => e.codigo === p.codigo && e.round === round));
-  produtosDaContagem.forEach(p => {
-    const entradas = inv.entries.filter(e => e.codigo === p.codigo && e.round === round);
-    const total = entradas.reduce((soma, e) => soma + e.quantity, 0);
-    const avaria = entradas.reduce((soma, e) => soma + (e.qtdAvaria || 0), 0);
-    const locs = [...new Set(entradas.filter(e => e.arvore || e.lado).map(e => `${e.arvore || '-'}/${e.lado || '-'}`))].join('; ');
-    const detalhes = entradas.map(e => e.detalheContagem ? formatarDetalhe(e.detalheContagem) : formatNumeroBR(e.quantity)).join(' | ');
-    rows.push([p.codigo, p.referencia, p.descricao, formatNumeroBR(total), inv.numero, locs || '-', detalhes || '-', formatNumeroBR(avaria || '')]);
+  const itens = produtosDaContagemParaExport(inv, round);
+  itens.forEach(({ produto: p, quantidade, avaria, locs, detalhes }) => {
+    rows.push([p.codigo, p.referencia, p.descricao, formatNumeroBR(quantidade), inv.numero, locs || '-', detalhes || '-', formatNumeroBR(avaria || '')]);
   });
-  if (rows.length === 1) { showToast(`Não há lançamentos na ${round}ª contagem ainda.`, true); return; }
+  if (rows.length === 1) { showToast(`Não há itens na ${round}ª contagem ainda.`, true); return; }
   downloadCsv(`inventario_${inv.numero}_${round}a_contagem.csv`, rows);
 }
 
