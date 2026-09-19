@@ -931,7 +931,7 @@ function viewInventariar() {
       </div>
       <div class="scan-box" id="btn-abrir-camera"><div class="camera-ic">📷</div><b>TOCAR PARA ESCANEAR</b><p>ou digite o código abaixo</p></div>
       <div id="qr-reader" style="display:none;"></div>
-      <div class="field"><label>CÓDIGO OU CÓDIGO DE BARRAS</label><input id="input-codigo" placeholder="Ex: 3 ou 200000000003" autofocus /></div>
+      <div class="field"><label>CÓDIGO OU CÓDIGO DE BARRAS</label><input id="input-codigo" type="text" inputmode="numeric" pattern="[0-9]*" autocomplete="off" autocorrect="off" spellcheck="false" placeholder="Ex: 3 ou 200000000003" autofocus /></div>
       <button class="btn btn-primary" id="btn-buscar-produto">BUSCAR</button>
       ${popupInventariar(inv, rodadaHabilitada)}
     ` : `
@@ -1273,8 +1273,16 @@ function bindGlobal() {
   const btnAbrirCamera = document.getElementById('btn-abrir-camera');
   if (btnAbrirCamera) btnAbrirCamera.onclick = iniciarScanner;
 
-  document.getElementById('qtd-menos')?.addEventListener('click', () => { state.qtd = Math.max(0, state.qtd - 1); render(); });
-  document.getElementById('qtd-mais')?.addEventListener('click', () => { state.qtd = state.qtd + 1; render(); });
+  document.getElementById('qtd-menos')?.addEventListener('click', () => {
+    state.qtd = Math.max(0, state.qtd - 1);
+    const input = document.getElementById('qtd-input');
+    if (input) input.value = state.qtd;
+  });
+  document.getElementById('qtd-mais')?.addEventListener('click', () => {
+    state.qtd = state.qtd + 1;
+    const input = document.getElementById('qtd-input');
+    if (input) input.value = state.qtd;
+  });
   document.getElementById('qtd-input')?.addEventListener('change', e => { state.qtd = Math.max(0, +e.target.value || 0); });
   document.querySelectorAll('[data-qtdmodo]').forEach(b => b.onclick = () => {
     state.qtdModo = b.dataset.qtdmodo;
