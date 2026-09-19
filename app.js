@@ -128,6 +128,8 @@ async function buscarTudoPaginado(criarQuery, tamanhoPagina = 1000) {
 }
 
 async function refreshInventories() {
+  _statusCacheVersion++;
+  _statusCache.clear();
   const { data: invs, error } = await sb.from('inventories').select('*').order('created_at');
   if (error) { console.error(error); return; }
   const ids = invs.map(i => i.id);
@@ -326,7 +328,19 @@ function roundHasData(inv, codigo, round) {
          inv.corrections.some(c => c.codigo === codigo && c.round === round);
 }
 
+let _statusCacheVersion = 0;
+let _statusCache = new Map();
+
 function productStatus(inv, codigo) {
+  const chave = _statusCacheVersion + '|' + inv.id + '|' + codigo;
+  const emCache = _statusCache.get(chave);
+  if (emCache) return emCache;
+  const resultado = calcularProductStatus(inv, codigo);
+  _statusCache.set(chave, resultado);
+  return resultado;
+}
+
+function calcularProductStatus(inv, codigo) {
   const t1 = effectiveRoundTotal(inv, codigo, 1);
   const t2 = effectiveRoundTotal(inv, codigo, 2);
   let t3 = effectiveRoundTotal(inv, codigo, 3);
