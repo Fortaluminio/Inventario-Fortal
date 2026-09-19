@@ -114,14 +114,27 @@ function calcularTotalVolumes() {
 
 let inventoriesCache = [];
 
+async function buscarTudoPaginado(criarQuery, tamanhoPagina = 1000) {
+  let tudo = [];
+  let inicio = 0;
+  while (true) {
+    const { data, error } = await criarQuery().range(inicio, inicio + tamanhoPagina - 1);
+    if (error) { console.error('[paginacao] erro:', error); return tudo; }
+    tudo = tudo.concat(data || []);
+    if (!data || data.length < tamanhoPagina) break;
+    inicio += tamanhoPagina;
+  }
+  return tudo;
+}
+
 async function refreshInventories() {
   const { data: invs, error } = await sb.from('inventories').select('*').order('created_at');
   if (error) { console.error(error); return; }
   const ids = invs.map(i => i.id);
-  const [{ data: prods }, { data: entries }, { data: corrections }] = await Promise.all([
-    ids.length ? sb.from('inventory_products').select('*').in('inventory_id', ids) : { data: [] },
-    ids.length ? sb.from('count_entries').select('*').in('inventory_id', ids) : { data: [] },
-    ids.length ? sb.from('corrections').select('*').in('inventory_id', ids) : { data: [] },
+  const [prods, entries, corrections] = await Promise.all([
+    ids.length ? buscarTudoPaginado(() => sb.from('inventory_products').select('*').in('inventory_id', ids)) : [],
+    ids.length ? buscarTudoPaginado(() => sb.from('count_entries').select('*').in('inventory_id', ids)) : [],
+    ids.length ? buscarTudoPaginado(() => sb.from('corrections').select('*').in('inventory_id', ids)) : [],
   ]);
 
   inventoriesCache = invs.map(inv => ({
@@ -157,10 +170,12 @@ function temFotoLocal(codigo) {
 }
 
 async function criarInventarioSupabase(numero, produtos) {
+  console.log('[import] criando registro do inventário', numero, '...');
   const { data: inv, error } = await sb.from('inventories')
     .insert({ numero, created_by: currentProfile.id })
     .select().single();
-  if (error) { showToast('Erro ao criar inventário: ' + error.message, true); return; }
+  if (error) { console.error('[import] erro ao criar inventories:', error); showToast('Erro ao criar inventário: ' + error.message, true, 8000); return false; }
+  console.log('[import] inventário criado, id:', inv.id, '| total de produtos a inserir:', produtos.length);
 
   const rows = produtos.map(p => ({
     inventory_id: inv.id, codigo: p.codigo, referencia: p.referencia,
@@ -170,13 +185,30 @@ async function criarInventarioSupabase(numero, produtos) {
   const TAMANHO_LOTE = 400;
   for (let i = 0; i < rows.length; i += TAMANHO_LOTE) {
     const lote = rows.slice(i, i + TAMANHO_LOTE);
-    const { error: e2 } = await sb.from('inventory_products').insert(lote);
-    if (e2) { showToast(`Erro ao importar produtos (lote ${Math.floor(i / TAMANHO_LOTE) + 1}): ` + e2.message, true); return; }
+    const numeroLote = Math.floor(i / TAMANHO_LOTE) + 1;
+    const totalLotes = Math.ceil(rows.length / TAMANHO_LOTE);
+    console.log(`[import] enviando lote ${numeroLote}/${totalLotes} (${lote.length} produtos, itens ${i + 1} a ${i + lote.length})...`);
+    try {
+      const { error: e2, status, statusText } = await sb.from('inventory_products').insert(lote);
+      if (e2) {
+        console.error(`[import] ERRO no lote ${numeroLote}/${totalLotes}:`, e2, 'status:', status, statusText);
+        showToast(`Erro no lote ${numeroLote} de ${totalLotes} (parou em ${i} de ${rows.length} produtos): ` + e2.message, true, 9000);
+        return false;
+      }
+      console.log(`[import] lote ${numeroLote}/${totalLotes} OK.`);
+    } catch (err) {
+      console.error(`[import] EXCEÇÃO no lote ${numeroLote}/${totalLotes}:`, err);
+      showToast(`Falha de conexão no lote ${numeroLote} de ${totalLotes} (parou em ${i} de ${rows.length} produtos). Tente de novo.`, true, 9000);
+      return false;
+    }
     if (rows.length > TAMANHO_LOTE) {
       showToast(`Importando... ${Math.min(i + TAMANHO_LOTE, rows.length)} de ${rows.length}`, false, 1500);
     }
   }
+  console.log('[import] todos os lotes inseridos com sucesso. Atualizando...');
   await refreshInventories();
+  console.log('[import] finalizado.');
+  return true;
 }
 
 async function excluirLancamentoSupabase(entryId) {
@@ -1022,11 +1054,13 @@ function bindGlobal() {
     showToast('Lendo PDF...');
     try {
       const texto = await extractTextFromPdf(file);
+      console.log('[pdf] texto extraído:', texto.length, 'caracteres,', texto.split('\n').length, 'linhas');
       state.novoInventarioTexto = texto;
       state.novoInventarioPreview = parseWinthorReport(texto);
+      console.log('[pdf] produtos identificados no PDF:', state.novoInventarioPreview.produtos.length, '| número do inventário:', state.novoInventarioPreview.numeroInventario);
       render();
     } catch (err) {
-      console.error(err);
+      console.error('[pdf] erro ao ler:', err);
       showToast('Não foi possível ler esse PDF. Tente colar o texto manualmente.', true);
     }
   };
@@ -1034,9 +1068,22 @@ function bindGlobal() {
   if (btnConfirmarInv) btnConfirmarInv.onclick = async () => {
     const preview = state.novoInventarioPreview;
     const numero = preview.numeroInventario || String(Date.now()).slice(-4);
+    console.log('[import] iniciando criação — numero:', numero, '| produtos no preview:', preview.produtos.length);
     btnConfirmarInv.disabled = true; btnConfirmarInv.textContent = 'CRIANDO...';
-    await criarInventarioSupabase(numero, preview.produtos);
-    state._novoOpen = false; state.novoInventarioTexto = ''; state.novoInventarioPreview = null;
+    let ok = false;
+    try {
+      ok = await criarInventarioSupabase(numero, preview.produtos);
+    } catch (err) {
+      console.error('[import] erro inesperado:', err);
+      showToast('Erro inesperado ao importar: ' + (err?.message || err), true, 8000);
+    }
+    btnConfirmarInv.disabled = false; btnConfirmarInv.textContent = 'CONFIRMAR E CRIAR INVENTÁRIO';
+    if (ok) {
+      console.log('[import] concluído com sucesso.');
+      state._novoOpen = false; state.novoInventarioTexto = ''; state.novoInventarioPreview = null;
+    } else {
+      console.log('[import] NÃO concluído — preview mantido pra você tentar de novo.');
+    }
     render();
   };
 
