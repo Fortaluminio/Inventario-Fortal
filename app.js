@@ -236,13 +236,27 @@ async function excluirTodosLancamentosRodada(inventoryId, codigo, round) {
 }
 
 async function registrarLancamentoSupabase(inventoryId, codigo, round, quantity, arvore, lado, detalheContagem, qtdAvaria) {
-  const { error } = await sb.from('count_entries').insert({
+  const { data, error } = await sb.from('count_entries').insert({
     inventory_id: inventoryId, codigo, round, quantity, arvore: arvore || null, lado: lado || null,
     detalhe_contagem: detalheContagem, qtd_avaria: qtdAvaria,
     user_id: currentProfile.id, user_nome: currentProfile.nome, device_id: deviceId(),
-  });
+  }).select().single();
   if (error) { showToast('Erro ao registrar: ' + error.message, true); return false; }
-  await refreshInventories();
+
+  // Atualiza a tela na hora, sem esperar recarregar os milhares de produtos
+  // de novo — a sincronização completa acontece em segundo plano.
+  const inv = inventoriesCache.find(i => i.id === inventoryId);
+  if (inv) {
+    inv.entries.push({
+      id: data.id, codigo: data.codigo, round: data.round, quantity: +data.quantity,
+      arvore: data.arvore, lado: data.lado,
+      detalheContagem: data.detalhe_contagem || null,
+      qtdAvaria: data.qtd_avaria == null ? null : +data.qtd_avaria,
+      userName: data.user_nome, deviceId: data.device_id, timestamp: data.created_at,
+    });
+    _statusCacheVersion++;
+  }
+  refreshInventoriesDebounced();
   return true;
 }
 
@@ -271,7 +285,7 @@ async function atualizarEtapaSupabase(inventoryId, patch) {
 let _refreshDebounceTimer = null;
 function refreshInventoriesDebounced() {
   clearTimeout(_refreshDebounceTimer);
-  _refreshDebounceTimer = setTimeout(() => { refreshInventories(); }, 700);
+  _refreshDebounceTimer = setTimeout(() => { refreshInventories(); }, 2000);
 }
 
 function assinarTempoReal() {
@@ -1046,7 +1060,7 @@ function viewPerfil() {
             const p = e.inv.products.find(p => p.codigo === e.codigo);
             return `<div class="card">
               <div style="display:flex;justify-content:space-between;align-items:start;">
-                <h3>${p?.referencia || e.codigo}</h3>
+                <h3>${p?.referencia || e.codigo} <span style="color:var(--texto-suave);font-weight:600;">· Cód. ${e.codigo}</span></h3>
                 <span class="badge badge-andamento">${e.round}ª contagem</span>
               </div>
               <div class="meta">${p?.descricao || ''}</div>
