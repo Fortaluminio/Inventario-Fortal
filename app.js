@@ -127,14 +127,24 @@ async function buscarTudoPaginado(criarQuery, tamanhoPagina = 1000) {
   return tudo;
 }
 
-async function refreshInventories() {
+let _produtosCache = null;
+
+async function refreshInventories(opcoes = {}) {
+  const completo = opcoes.completo !== false;
   _statusCacheVersion++;
   _statusCache.clear();
   const { data: invs, error } = await sb.from('inventories').select('*').order('created_at');
   if (error) { console.error(error); return; }
   const ids = invs.map(i => i.id);
-  const [prods, entries, corrections] = await Promise.all([
-    ids.length ? buscarTudoPaginado(() => sb.from('inventory_products').select('*').in('inventory_id', ids)) : [],
+
+  let prods;
+  if (completo || !_produtosCache) {
+    prods = ids.length ? await buscarTudoPaginado(() => sb.from('inventory_products').select('*').in('inventory_id', ids)) : [];
+    _produtosCache = prods;
+  } else {
+    prods = _produtosCache;
+  }
+  const [entries, corrections] = await Promise.all([
     ids.length ? buscarTudoPaginado(() => sb.from('count_entries').select('*').in('inventory_id', ids)) : [],
     ids.length ? buscarTudoPaginado(() => sb.from('corrections').select('*').in('inventory_id', ids)) : [],
   ]);
@@ -283,17 +293,17 @@ async function atualizarEtapaSupabase(inventoryId, patch) {
 }
 
 let _refreshDebounceTimer = null;
-function refreshInventoriesDebounced() {
+function refreshInventoriesDebounced(completo = false) {
   clearTimeout(_refreshDebounceTimer);
-  _refreshDebounceTimer = setTimeout(() => { refreshInventories(); }, 2000);
+  _refreshDebounceTimer = setTimeout(() => { refreshInventories({ completo }); }, 2000);
 }
 
 function assinarTempoReal() {
   sb.channel('inventario-fortal-mudancas')
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'inventories' }, refreshInventoriesDebounced)
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'inventory_products' }, refreshInventoriesDebounced)
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'count_entries' }, refreshInventoriesDebounced)
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'corrections' }, refreshInventoriesDebounced)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'inventories' }, () => refreshInventoriesDebounced(true))
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'inventory_products' }, () => refreshInventoriesDebounced(true))
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'count_entries' }, () => refreshInventoriesDebounced(false))
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'corrections' }, () => refreshInventoriesDebounced(false))
     .subscribe();
 }
 
