@@ -531,6 +531,7 @@ const state = {
   lado: '',
   gerenciarTab: 'resumo',
   produtosSearch: '',
+  _confirmarExclusaoInv: false,
   novoInventarioTexto: '',
   novoInventarioPreview: null,
 };
@@ -731,7 +732,6 @@ function viewGerenciarInventario(inv) {
         ${!inv.roundClosed[1] && !inv.roundClosed[2] && !inv.roundClosed[3] ? `<div class="meta">Nenhuma contagem encerrada ainda.</div>` : ''}
       </div>
     </div>
-    <button class="btn btn-ghost" id="btn-excluir-inventario" style="color:var(--vermelho);margin-bottom:12px;">EXCLUIR ESTE INVENTÁRIO</button>
     <button class="btn btn-primary" id="btn-export-xlsx" style="margin-bottom:8px;">RELATÓRIO COMPLETO (EXCEL — RESUMO + DETALHAMENTO)</button>
     <button class="btn btn-ghost" id="btn-export-csv" style="margin-bottom:12px;">EXCEL DOS LANÇAMENTOS ATUAIS (CSV)</button>
     <div class="meta" style="font-weight:600;margin-bottom:8px;">Baixar só uma contagem</div>
@@ -745,6 +745,22 @@ function viewGerenciarInventario(inv) {
       <button class="btn btn-outline btn-sm" data-export-txt="1" style="flex:1;">1ª CONTAGEM</button>
       <button class="btn btn-outline btn-sm" data-export-txt="2" style="flex:1;">2ª CONTAGEM</button>
       <button class="btn btn-outline btn-sm" data-export-txt="3" style="flex:1;">3ª CONTAGEM</button>
+    </div>
+    <div style="border-top:1px solid var(--borda);margin:28px 0 16px;padding-top:20px;">
+      <div class="meta" style="font-weight:700;color:var(--vermelho);margin-bottom:8px;">ZONA DE RISCO</div>
+      ${!state._confirmarExclusaoInv ? `
+        <button class="btn btn-outline" id="btn-excluir-inventario" style="border-color:var(--vermelho);color:var(--vermelho);">EXCLUIR ESTE INVENTÁRIO</button>
+      ` : `
+        <div class="card" style="background:var(--vermelho-bg);border-color:var(--vermelho);">
+          <h3 style="color:var(--vermelho);">Tem certeza?</h3>
+          <div class="meta" style="color:var(--vermelho);margin-bottom:14px;">
+            Isso apaga o Inventário ${inv.numero} inteiro — todos os produtos, lançamentos e correções.
+            Não pode ser desfeito.
+          </div>
+          <button class="btn" style="background:var(--vermelho);color:#fff;margin-bottom:8px;" id="btn-excluir-inventario-confirmado">SIM, EXCLUIR O INVENTÁRIO ${inv.numero}</button>
+          <button class="btn btn-ghost" id="btn-cancelar-exclusao-inv">CANCELAR</button>
+        </div>
+      `}
     </div>`;
   } else if (state.gerenciarTab === 'produtos') {
     const termo = (state.produtosSearch || '').trim().toLowerCase();
@@ -1060,7 +1076,7 @@ function bindGlobal() {
     state.currentInventoryId = b.dataset.openInv; state.gerenciarTab = 'resumo'; render();
   });
   const btnVoltar = document.getElementById('btn-voltar-inv');
-  if (btnVoltar) btnVoltar.onclick = () => { state.currentInventoryId = null; state.produtosSearch = ''; render(); };
+  if (btnVoltar) btnVoltar.onclick = () => { state.currentInventoryId = null; state.produtosSearch = ''; state._confirmarExclusaoInv = false; render(); };
   document.querySelectorAll('[data-gtab]').forEach(b => b.onclick = () => { state.gerenciarTab = b.dataset.gtab; render(); });
   document.getElementById('produtos-search')?.addEventListener('input', e => {
     state.produtosSearch = e.target.value;
@@ -1148,11 +1164,18 @@ function bindGlobal() {
   if (btnExportCsv) btnExportCsv.onclick = () => exportLancamentosCsv(currentInventory());
   const btnExportXlsx = document.getElementById('btn-export-xlsx');
   if (btnExportXlsx) btnExportXlsx.onclick = () => exportRelatorioCompletoXlsx(currentInventory());
-  document.getElementById('btn-excluir-inventario')?.addEventListener('click', async () => {
+  document.getElementById('btn-excluir-inventario')?.addEventListener('click', () => {
+    state._confirmarExclusaoInv = true; render();
+  });
+  document.getElementById('btn-cancelar-exclusao-inv')?.addEventListener('click', () => {
+    state._confirmarExclusaoInv = false; render();
+  });
+  document.getElementById('btn-excluir-inventario-confirmado')?.addEventListener('click', async () => {
     const inv = currentInventory();
-    if (!confirm(`Excluir o Inventário ${inv.numero} inteiro, com todos os lançamentos e correções? Essa ação não pode ser desfeita.`)) return;
     const ok = await excluirInventarioSupabase(inv.id);
-    if (ok) { state.currentInventoryId = null; render(); }
+    state._confirmarExclusaoInv = false;
+    if (ok) { state.currentInventoryId = null; }
+    render();
   });
   document.querySelectorAll('[data-export-round]').forEach(b => b.onclick = () => {
     exportLancamentosPorContagem(currentInventory(), +b.dataset.exportRound);
