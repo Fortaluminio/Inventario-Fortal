@@ -103,6 +103,9 @@ create policy "criar inventario - gerenciar" on inventories for insert with chec
 create policy "editar inventario - gerenciar" on inventories for update using (
   exists (select 1 from profiles where id = auth.uid() and role = 'gerenciar')
 );
+create policy "excluir inventario - gerenciar" on inventories for delete using (
+  exists (select 1 from profiles where id = auth.uid() and role = 'gerenciar')
+);
 
 -- inventory_products: leitura livre; inserir só quem é Gerenciar (import do PDF)
 create policy "ler produtos do inventario" on inventory_products for select using (auth.role() = 'authenticated');

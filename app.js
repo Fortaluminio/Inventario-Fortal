@@ -166,14 +166,29 @@ async function criarInventarioSupabase(numero, produtos) {
     inventory_id: inv.id, codigo: p.codigo, referencia: p.referencia,
     descricao: p.descricao, unidade: p.unidade, codigo_barras: p.codigoBarras,
   }));
-  const { error: e2 } = await sb.from('inventory_products').insert(rows);
-  if (e2) { showToast('Erro ao importar produtos: ' + e2.message, true); return; }
+
+  const TAMANHO_LOTE = 400;
+  for (let i = 0; i < rows.length; i += TAMANHO_LOTE) {
+    const lote = rows.slice(i, i + TAMANHO_LOTE);
+    const { error: e2 } = await sb.from('inventory_products').insert(lote);
+    if (e2) { showToast(`Erro ao importar produtos (lote ${Math.floor(i / TAMANHO_LOTE) + 1}): ` + e2.message, true); return; }
+    if (rows.length > TAMANHO_LOTE) {
+      showToast(`Importando... ${Math.min(i + TAMANHO_LOTE, rows.length)} de ${rows.length}`, false, 1500);
+    }
+  }
   await refreshInventories();
 }
 
 async function excluirLancamentoSupabase(entryId) {
   const { error } = await sb.from('count_entries').delete().eq('id', entryId);
   if (error) { showToast('Erro ao excluir: ' + error.message, true); return false; }
+  await refreshInventories();
+  return true;
+}
+
+async function excluirInventarioSupabase(inventoryId) {
+  const { error } = await sb.from('inventories').delete().eq('id', inventoryId);
+  if (error) { showToast('Erro ao excluir inventário: ' + error.message, true); return false; }
   await refreshInventories();
   return true;
 }
@@ -219,12 +234,18 @@ async function atualizarEtapaSupabase(inventoryId, patch) {
   await refreshInventories();
 }
 
+let _refreshDebounceTimer = null;
+function refreshInventoriesDebounced() {
+  clearTimeout(_refreshDebounceTimer);
+  _refreshDebounceTimer = setTimeout(() => { refreshInventories(); }, 700);
+}
+
 function assinarTempoReal() {
   sb.channel('inventario-fortal-mudancas')
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'inventories' }, refreshInventories)
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'inventory_products' }, refreshInventories)
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'count_entries' }, refreshInventories)
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'corrections' }, refreshInventories)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'inventories' }, refreshInventoriesDebounced)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'inventory_products' }, refreshInventoriesDebounced)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'count_entries' }, refreshInventoriesDebounced)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'corrections' }, refreshInventoriesDebounced)
     .subscribe();
 }
 
@@ -663,6 +684,7 @@ function viewGerenciarInventario(inv) {
         ${!inv.roundClosed[1] && !inv.roundClosed[2] && !inv.roundClosed[3] ? `<div class="meta">Nenhuma contagem encerrada ainda.</div>` : ''}
       </div>
     </div>
+    <button class="btn btn-ghost" id="btn-excluir-inventario" style="color:var(--vermelho);margin-bottom:12px;">EXCLUIR ESTE INVENTÁRIO</button>
     <button class="btn btn-primary" id="btn-export-xlsx" style="margin-bottom:8px;">RELATÓRIO COMPLETO (EXCEL — RESUMO + DETALHAMENTO)</button>
     <button class="btn btn-ghost" id="btn-export-csv" style="margin-bottom:12px;">EXCEL DOS LANÇAMENTOS ATUAIS (CSV)</button>
     <div class="meta" style="font-weight:600;margin-bottom:8px;">Baixar só uma contagem</div>
@@ -1045,6 +1067,12 @@ function bindGlobal() {
   if (btnExportCsv) btnExportCsv.onclick = () => exportLancamentosCsv(currentInventory());
   const btnExportXlsx = document.getElementById('btn-export-xlsx');
   if (btnExportXlsx) btnExportXlsx.onclick = () => exportRelatorioCompletoXlsx(currentInventory());
+  document.getElementById('btn-excluir-inventario')?.addEventListener('click', async () => {
+    const inv = currentInventory();
+    if (!confirm(`Excluir o Inventário ${inv.numero} inteiro, com todos os lançamentos e correções? Essa ação não pode ser desfeita.`)) return;
+    const ok = await excluirInventarioSupabase(inv.id);
+    if (ok) { state.currentInventoryId = null; render(); }
+  });
   document.querySelectorAll('[data-export-round]').forEach(b => b.onclick = () => {
     exportLancamentosPorContagem(currentInventory(), +b.dataset.exportRound);
   });
