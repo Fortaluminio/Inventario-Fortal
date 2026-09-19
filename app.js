@@ -791,12 +791,13 @@ function viewGerenciarInventario(inv) {
     </div>`;
   } else if (state.gerenciarTab === 'produtos') {
     const termo = (state.produtosSearch || '').trim().toLowerCase();
-    const produtosFiltrados = termo
+    const produtosFiltrados = (termo
       ? inv.products.filter(p =>
-          String(p.codigo).toLowerCase().includes(termo) ||
+          String(p.codigo).toLowerCase() === termo ||
           (p.referencia || '').toLowerCase().includes(termo) ||
           (p.descricao || '').toLowerCase().includes(termo))
-      : inv.products;
+      : inv.products
+    ).slice().sort((a, b) => parseInt(a.codigo, 10) - parseInt(b.codigo, 10));
     body = `
       <div class="field" style="margin-bottom:12px;">
         <input id="produtos-search" placeholder="Buscar por código, referência ou descrição..." value="${state.produtosSearch || ''}" />
