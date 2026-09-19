@@ -354,17 +354,32 @@ async function extractTextFromPdf(file) {
   for (let i = 1; i <= pdf.numPages; i++) {
     const page = await pdf.getPage(i);
     const content = await page.getTextContent();
-    let lastY = null, line = '';
+    // Agrupa por linha (Y) e ordena cada linha por X — o pdf.js entrega os
+    // itens na ordem do fluxo interno do PDF, que nem sempre é da esquerda
+    // pra direita, então sem isso as colunas saem embaralhadas.
+    const grupos = [];
     for (const item of content.items) {
-      const y = item.transform[5];
-      if (lastY !== null && Math.abs(y - lastY) > 2) {
-        fullText += line + '\n';
-        line = '';
-      }
-      line += (line ? ' ' : '') + item.str;
-      lastY = y;
+      if (!item.str || !item.str.trim()) continue;
+      const x = item.transform[4], y = item.transform[5];
+      let g = grupos.find(g => Math.abs(g.y - y) <= 2);
+      if (!g) { g = { y, itens: [] }; grupos.push(g); }
+      g.itens.push({ x, str: item.str, width: item.width || 0 });
     }
-    fullText += line + '\n';
+    grupos.sort((a, b) => b.y - a.y);
+    for (const g of grupos) {
+      g.itens.sort((a, b) => a.x - b.x);
+      let linha = '', lastXEnd = null;
+      for (const it of g.itens) {
+        if (lastXEnd !== null) {
+          const gap = it.x - lastXEnd;
+          if (gap > 6) linha += '   ';
+          else if (gap > 0.5) linha += ' ';
+        }
+        linha += it.str;
+        lastXEnd = it.x + it.width;
+      }
+      fullText += linha + '\n';
+    }
   }
   return fullText;
 }
@@ -373,21 +388,61 @@ async function extractTextFromPdf(file) {
 
 function parseWinthorReport(texto) {
   const master = MASTER.get();
+  const porCodigo = new Map(master.map(p => [p.codigo, p]));
   const linhas = texto.split('\n');
   const encontrados = new Map();
   let numeroInventario = null;
 
-  const mInv = texto.match(/Invent[áa]rio\s*\n?\s*(\d+)/i);
-  if (mInv) numeroInventario = mInv[1];
+  const mInvNovo = texto.match(/Filial\s+Invent[áa]rio\s+Montador\s+invent[áa]rio\s*\n\s*\d+\s+(\d+)/i);
+  if (mInvNovo) {
+    numeroInventario = mInvNovo[1];
+  } else {
+    const mInv = texto.match(/Invent[áa]rio\s*\n?\s*(\d+)/i);
+    if (mInv) numeroInventario = mInv[1];
+  }
 
-  const linePattern = /(\d+)\s+([A-Za-zÀ-ÿ0-9./"'\-]+)\s*-\s*(.+?)\s+UN\b/;
+  // Formato "Divergência estoque x contagem" e afins: colunas alinhadas —
+  // um número de código seguido da descrição, depois embalagem/UN/estoque.
+  // O número de colunas antes do código varia (Mod/Rua/Num/Apt nem sempre
+  // vêm todos preenchidos), então captura o ÚLTIMO número da sequência
+  // inicial como o código.
+  const padraoColunas = /^\s*(?:\d+\s+)+(\d+)\s+(.+?)\s{2,}\S+\s+[A-Z0-9]{1,3}\s+[\d.,]+/;
+  // Formato antigo "Relatório de inventário rotativo simples": código +
+  // referência - descrição, seguido de UN.
+  const padraoAntigo = /(\d+)\s+([A-Za-zÀ-ÿ0-9./"'\-]+)\s*-\s*(.+?)\s+UN\b/;
+
   for (const linha of linhas) {
-    const m = linha.match(linePattern);
-    if (!m) continue;
-    const codigo = m[1];
-    const referencia = m[2].trim();
-    const master_p = master.find(p => p.codigo === codigo && p.referencia === referencia);
-    if (master_p) encontrados.set(codigo, master_p);
+    let codigo = null, textoProduto = null;
+
+    const m1 = linha.match(padraoColunas);
+    if (m1) {
+      codigo = m1[1];
+      textoProduto = m1[2].trim();
+    } else {
+      const m2 = linha.match(padraoAntigo);
+      if (m2) {
+        codigo = m2[1];
+        textoProduto = `${m2[2].trim()} - ${m2[3].trim()}`;
+      }
+    }
+    if (!codigo || encontrados.has(codigo)) continue;
+
+    const masterProd = porCodigo.get(codigo);
+    if (masterProd) {
+      encontrados.set(codigo, { ...masterProd, foraDaBase: false });
+    } else if (textoProduto) {
+      // Produto ainda não cadastrado na base mestre do app — usa a
+      // descrição direto do relatório, mas sinaliza pra conferência.
+      let referencia = textoProduto, descricao = '';
+      const partes = textoProduto.split(' - ');
+      if (partes.length > 1) { referencia = partes[0].trim(); descricao = partes.slice(1).join(' - ').trim(); }
+      else { descricao = textoProduto; referencia = codigo; }
+      encontrados.set(codigo, {
+        codigo, referencia, descricao, unidade: '',
+        codigoBarras: '20' + String(codigo).padStart(10, '0'),
+        temFoto: false, foraDaBase: true,
+      });
+    }
   }
   return { numeroInventario, produtos: Array.from(encontrados.values()) };
 }
@@ -548,9 +603,15 @@ function modalNovoInventario() {
         <div class="card">
           <h3>Inventário nº ${preview.numeroInventario || '(não identificado)'}</h3>
           <div class="meta">Produtos identificados: ${preview.produtos.length}</div>
+          ${preview.produtos.some(p => p.foraDaBase) ? `
+            <div class="meta" style="color:var(--laranja);margin-top:6px;">
+              ⚠ ${preview.produtos.filter(p => p.foraDaBase).length} produto(s) não estão na base mestre do app —
+              a descrição foi lida direto do PDF. Confira antes de confirmar.
+            </div>
+          ` : ''}
           <table class="report" style="margin-top:10px;">
-            <tr><th>Cód.</th><th>Referência</th><th>Descrição</th></tr>
-            ${preview.produtos.map(p => `<tr><td>${p.codigo}</td><td>${p.referencia}</td><td>${p.descricao}</td></tr>`).join('')}
+            <tr><th>Cód.</th><th>Referência</th><th>Descrição</th><th></th></tr>
+            ${preview.produtos.map(p => `<tr><td>${p.codigo}</td><td>${p.referencia}</td><td>${p.descricao}</td><td>${p.foraDaBase ? '<span class="badge badge-alerta">NOVO</span>' : ''}</td></tr>`).join('')}
           </table>
         </div>
         <button class="btn btn-success" id="btn-confirmar-inv" ${preview.produtos.length===0?'disabled':''}>CONFIRMAR E CRIAR INVENTÁRIO</button>
