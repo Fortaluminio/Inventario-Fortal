@@ -957,7 +957,7 @@ function viewInventariar() {
         </div>
         ${state.qtdModo === 'simples' ? `
           <div class="qtd-control">
-            <button id="qtd-menos">−</button><input id="qtd-input" type="number" value="${state.qtd}" /><button id="qtd-mais">+</button>
+            <button id="qtd-menos">−</button><input id="qtd-input" type="number" inputmode="numeric" pattern="[0-9]*" value="${state.qtd}" /><button id="qtd-mais">+</button>
           </div>
         ` : `
           <div class="loc-resumo" style="margin-bottom:12px;">
