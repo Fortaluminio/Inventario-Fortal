@@ -530,6 +530,7 @@ const state = {
   arvore: '',
   lado: '',
   gerenciarTab: 'resumo',
+  produtosSearch: '',
   novoInventarioTexto: '',
   novoInventarioPreview: null,
 };
@@ -746,8 +747,20 @@ function viewGerenciarInventario(inv) {
       <button class="btn btn-outline btn-sm" data-export-txt="3" style="flex:1;">3ª CONTAGEM</button>
     </div>`;
   } else if (state.gerenciarTab === 'produtos') {
-    body = `<table class="report"><tr><th>Cód</th><th>Ref</th><th>1ª</th><th>2ª</th><th>3ª</th><th>Final</th><th>Avaria</th><th>Status</th></tr>
-      ${inv.products.map(p => {
+    const termo = (state.produtosSearch || '').trim().toLowerCase();
+    const produtosFiltrados = termo
+      ? inv.products.filter(p =>
+          String(p.codigo).toLowerCase().includes(termo) ||
+          (p.referencia || '').toLowerCase().includes(termo) ||
+          (p.descricao || '').toLowerCase().includes(termo))
+      : inv.products;
+    body = `
+      <div class="field" style="margin-bottom:12px;">
+        <input id="produtos-search" placeholder="Buscar por código, referência ou descrição..." value="${state.produtosSearch || ''}" />
+      </div>
+      <div class="meta" style="margin-bottom:8px;">${produtosFiltrados.length} de ${inv.products.length} produtos</div>
+      <table class="report"><tr><th>Cód</th><th>Ref</th><th>1ª</th><th>2ª</th><th>3ª</th><th>Final</th><th>Avaria</th><th>Status</th></tr>
+      ${produtosFiltrados.map(p => {
         const s = productStatus(inv, p.codigo);
         const avaria = inv.entries.filter(e => e.codigo === p.codigo).reduce((soma, e) => soma + (e.qtdAvaria || 0), 0);
         return `<tr data-corrigir="${p.codigo}"><td>${p.codigo}</td><td>${p.referencia}</td><td>${s.t1?formatNumeroBR(s.t1):'-'}</td><td>${s.t2?formatNumeroBR(s.t2):'-'}</td><td>${s.t3?formatNumeroBR(s.t3):'-'}</td><td><b>${s.final!=null?formatNumeroBR(s.final):'-'}</b></td><td>${avaria ? `<span style="color:var(--laranja);font-weight:700;">${formatNumeroBR(avaria)}</span>` : '-'}</td><td>${statusBadge(s.status)}</td></tr>`;
@@ -1047,8 +1060,15 @@ function bindGlobal() {
     state.currentInventoryId = b.dataset.openInv; state.gerenciarTab = 'resumo'; render();
   });
   const btnVoltar = document.getElementById('btn-voltar-inv');
-  if (btnVoltar) btnVoltar.onclick = () => { state.currentInventoryId = null; render(); };
+  if (btnVoltar) btnVoltar.onclick = () => { state.currentInventoryId = null; state.produtosSearch = ''; render(); };
   document.querySelectorAll('[data-gtab]').forEach(b => b.onclick = () => { state.gerenciarTab = b.dataset.gtab; render(); });
+  document.getElementById('produtos-search')?.addEventListener('input', e => {
+    state.produtosSearch = e.target.value;
+    const posCursor = e.target.selectionStart;
+    render();
+    const campoNovo = document.getElementById('produtos-search');
+    if (campoNovo) { campoNovo.focus(); campoNovo.setSelectionRange(posCursor, posCursor); }
+  });
 
   const fabNovo = document.getElementById('fab-novo');
   if (fabNovo) fabNovo.onclick = () => { state._novoOpen = true; state.novoInventarioPreview = null; render(); };
