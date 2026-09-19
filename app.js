@@ -721,6 +721,9 @@ function viewGerenciarInventario(inv) {
   const finalizados = inv.products.filter(p => productStatus(inv, p.codigo).status === 'FINALIZADO').length;
   const div = divergentProducts(inv);
   const divCritica = produtosDivergenciaCritica(inv);
+  const contadosR1 = inv.products.filter(p => roundHasData(inv, p.codigo, 1)).length;
+  const contadosR2 = inv.products.filter(p => roundHasData(inv, p.codigo, 2)).length;
+  const contadosR3 = div.filter(p => roundHasData(inv, p.codigo, 3)).length;
 
   let body = '';
   if (state.gerenciarTab === 'resumo') {
@@ -732,9 +735,9 @@ function viewGerenciarInventario(inv) {
       <div style="color:var(--lima);font-size:44px;font-weight:800;line-height:1.1;position:relative;">${pctGeral}%</div>
       <div style="color:#AFC3E0;font-size:12px;position:relative;">${finalizados} de ${inv.products.length} produtos finalizados</div>
     </div>
-    <div class="progress-row"><div class="label-row"><span>1ª CONTAGEM</span><span>${p1}%</span></div><div class="progress-bar-bg"><div class="progress-bar-fill" style="width:${p1}%"></div></div></div>
-    <div class="progress-row"><div class="label-row"><span>2ª CONTAGEM</span><span>${p2}%</span></div><div class="progress-bar-bg"><div class="progress-bar-fill" style="width:${p2}%"></div></div></div>
-    <div class="progress-row"><div class="label-row"><span>3ª CONTAGEM${div.length?` (${div.length} produtos)`:''}</span><span>${p3}%</span></div><div class="progress-bar-bg"><div class="progress-bar-fill" style="width:${p3}%"></div></div></div>
+    <div class="progress-row"><div class="label-row"><span>1ª CONTAGEM</span><span>${p1}% · ${contadosR1} de ${inv.products.length}</span></div><div class="progress-bar-bg"><div class="progress-bar-fill" style="width:${p1}%"></div></div></div>
+    <div class="progress-row"><div class="label-row"><span>2ª CONTAGEM</span><span>${p2}% · ${contadosR2} de ${inv.products.length}</span></div><div class="progress-bar-bg"><div class="progress-bar-fill" style="width:${p2}%"></div></div></div>
+    <div class="progress-row"><div class="label-row"><span>3ª CONTAGEM</span><span>${p3}% · ${contadosR3} de ${div.length}</span></div><div class="progress-bar-bg"><div class="progress-bar-fill" style="width:${p3}%"></div></div></div>
     ${divCritica.length ? `<div class="card" style="background:var(--vermelho-bg);border-color:var(--vermelho);"><h3 style="color:var(--vermelho);">⚠ Divergência crítica</h3><div class="meta" style="color:var(--vermelho);">${divCritica.length} produto(s) onde a 3ª contagem não bateu nem com a 1ª nem com a 2ª — revise manualmente na aba Produtos.</div></div>` : ''}
     ${div.length ? `<div class="card"><h3>⚠️ Divergências</h3><div class="meta">${div.length} produto(s) aguardando 3ª contagem</div></div>` : ''}
     <div class="card">
