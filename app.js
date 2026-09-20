@@ -555,6 +555,7 @@ const state = {
   lado: '',
   gerenciarTab: 'resumo',
   produtosSearch: '',
+  produtosStatusFiltro: '',
   _confirmarExclusaoInv: false,
   novoInventarioTexto: '',
   novoInventarioPreview: null,
@@ -791,16 +792,31 @@ function viewGerenciarInventario(inv) {
     </div>`;
   } else if (state.gerenciarTab === 'produtos') {
     const termo = (state.produtosSearch || '').trim().toLowerCase();
-    const produtosFiltrados = (termo
-      ? inv.products.filter(p =>
-          String(p.codigo).toLowerCase() === termo ||
-          (p.referencia || '').toLowerCase().includes(termo) ||
-          (p.descricao || '').toLowerCase().includes(termo))
-      : inv.products
-    ).slice().sort((a, b) => parseInt(a.codigo, 10) - parseInt(b.codigo, 10));
+    const statusFiltro = state.produtosStatusFiltro || '';
+    const produtosFiltrados = inv.products
+      .filter(p =>
+        !termo ||
+        String(p.codigo).toLowerCase() === termo ||
+        (p.referencia || '').toLowerCase().includes(termo) ||
+        (p.descricao || '').toLowerCase().includes(termo))
+      .filter(p => !statusFiltro || productStatus(inv, p.codigo).status === statusFiltro)
+      .sort((a, b) => parseInt(a.codigo, 10) - parseInt(b.codigo, 10));
     body = `
-      <div class="field" style="margin-bottom:12px;">
+      <div class="field" style="margin-bottom:10px;">
         <input id="produtos-search" placeholder="Buscar por código, referência ou descrição..." value="${state.produtosSearch || ''}" />
+      </div>
+      <div class="field" style="margin-bottom:12px;">
+        <select id="produtos-status-filtro">
+          <option value="">Todos os status</option>
+          <option value="AGUARDANDO 1ª" ${statusFiltro==='AGUARDANDO 1ª'?'selected':''}>Aguardando 1ª</option>
+          <option value="EM CONTAGEM (1ª)" ${statusFiltro==='EM CONTAGEM (1ª)'?'selected':''}>Em contagem (1ª)</option>
+          <option value="AGUARDANDO 2ª" ${statusFiltro==='AGUARDANDO 2ª'?'selected':''}>Aguardando 2ª</option>
+          <option value="EM CONTAGEM (2ª)" ${statusFiltro==='EM CONTAGEM (2ª)'?'selected':''}>Em contagem (2ª)</option>
+          <option value="AGUARDANDO 3ª" ${statusFiltro==='AGUARDANDO 3ª'?'selected':''}>⚠️ Aguardando 3ª (divergência)</option>
+          <option value="EM CONTAGEM (3ª)" ${statusFiltro==='EM CONTAGEM (3ª)'?'selected':''}>Em contagem (3ª)</option>
+          <option value="DIVERGÊNCIA CRÍTICA" ${statusFiltro==='DIVERGÊNCIA CRÍTICA'?'selected':''}>🔴 Divergência crítica</option>
+          <option value="FINALIZADO" ${statusFiltro==='FINALIZADO'?'selected':''}>✓ Finalizado</option>
+        </select>
       </div>
       <div class="meta" style="margin-bottom:8px;">${produtosFiltrados.length} de ${inv.products.length} produtos</div>
       <table class="report"><tr><th>Cód</th><th>Ref</th><th>1ª</th><th>2ª</th><th>3ª</th><th>Final</th><th>Avaria</th><th>Status</th></tr>
@@ -1104,8 +1120,12 @@ function bindGlobal() {
     state.currentInventoryId = b.dataset.openInv; state.gerenciarTab = 'resumo'; render();
   });
   const btnVoltar = document.getElementById('btn-voltar-inv');
-  if (btnVoltar) btnVoltar.onclick = () => { state.currentInventoryId = null; state.produtosSearch = ''; state._confirmarExclusaoInv = false; render(); };
+  if (btnVoltar) btnVoltar.onclick = () => { state.currentInventoryId = null; state.produtosSearch = ''; state.produtosStatusFiltro = ''; state._confirmarExclusaoInv = false; render(); };
   document.querySelectorAll('[data-gtab]').forEach(b => b.onclick = () => { state.gerenciarTab = b.dataset.gtab; render(); });
+  document.getElementById('produtos-status-filtro')?.addEventListener('change', e => {
+    state.produtosStatusFiltro = e.target.value;
+    render();
+  });
   document.getElementById('produtos-search')?.addEventListener('input', e => {
     state.produtosSearch = e.target.value;
     const posCursor = e.target.selectionStart;
