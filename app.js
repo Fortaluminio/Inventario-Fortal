@@ -557,6 +557,8 @@ const state = {
   produtosSearch: '',
   produtosStatusFiltro: '',
   _confirmarExclusaoInv: false,
+  _validar3a: false,
+  _validarSubstituirRound: null,
   novoInventarioTexto: '',
   novoInventarioPreview: null,
 };
@@ -881,6 +883,23 @@ function modalCorrecao(inv) {
     <div class="card" style="width:88%;max-width:380px;max-height:85vh;overflow:auto;">
       <h3>Corrigir — ${p.referencia}</h3>
       <div class="meta" style="margin-bottom:14px;">1ª: <b>${formatNumeroBR(s.t1)}</b> · 2ª: <b>${formatNumeroBR(s.t2)}</b> · 3ª: <b>${formatNumeroBR(s.t3)}</b> · Final: <b>${s.final!=null?formatNumeroBR(s.final):'-'}</b></div>
+      ${s.status === 'DIVERGÊNCIA CRÍTICA' ? `
+        <div class="card" style="background:var(--laranja-bg);border-color:var(--laranja);margin-bottom:16px;">
+          <label style="display:flex;align-items:center;gap:10px;cursor:pointer;">
+            <input type="checkbox" id="chk-validar-3a" ${state._validar3a ? 'checked' : ''} style="width:20px;height:20px;flex-shrink:0;" />
+            <span style="font-weight:700;color:var(--laranja);">✓ Validar a 3ª contagem (${formatNumeroBR(s.t3)}) como correta</span>
+          </label>
+          ${state._validar3a ? `
+            <div class="meta" style="margin:12px 0 6px;">A equipe errou na 1ª ou na 2ª — substituir qual pela 3ª?</div>
+            <div style="display:flex;gap:8px;margin-bottom:12px;">
+              <button data-validar-substituir="1" class="btn btn-sm ${state._validarSubstituirRound===1?'btn-primary':'btn-outline'}" style="flex:1;">1ª (era ${formatNumeroBR(s.t1)})</button>
+              <button data-validar-substituir="2" class="btn btn-sm ${state._validarSubstituirRound===2?'btn-primary':'btn-outline'}" style="flex:1;">2ª (era ${formatNumeroBR(s.t2)})</button>
+            </div>
+            <div class="field"><label>Motivo do ajuste</label><input id="validar-motivo" placeholder="Ex: 3ª contagem feita com mais gente, validada pelo administrador" /></div>
+            <button class="btn btn-success" id="btn-aplicar-validacao-3a" ${state._validarSubstituirRound ? '' : 'disabled'}>APLICAR E VALIDAR</button>
+          ` : ''}
+        </div>
+      ` : ''}
       ${lancamentos.length ? `
         <div class="meta" style="font-weight:600;margin-bottom:6px;">Onde foi contado</div>
         <table class="report" style="margin-bottom:16px;">
@@ -1242,6 +1261,8 @@ function bindGlobal() {
     const c2 = roundHasData(inv, tr.dataset.corrigir, 2);
     state._corrigirCodigo = tr.dataset.corrigir;
     state._corrigirRound = c3 ? 3 : c2 ? 2 : 1;
+    state._validar3a = false;
+    state._validarSubstituirRound = null;
     render();
   });
   document.querySelectorAll('[data-corr-round]').forEach(b => b.onclick = () => {
@@ -1249,6 +1270,35 @@ function bindGlobal() {
   });
   const btnFecharCorr = document.getElementById('btn-fechar-correcao');
   if (btnFecharCorr) btnFecharCorr.onclick = () => { state._corrigirCodigo = null; render(); };
+  document.getElementById('chk-validar-3a')?.addEventListener('change', e => {
+    state._validar3a = e.target.checked;
+    if (!e.target.checked) state._validarSubstituirRound = null;
+    render();
+  });
+  document.querySelectorAll('[data-validar-substituir]').forEach(b => b.onclick = () => {
+    state._validarSubstituirRound = +b.dataset.validarSubstituir;
+    render();
+  });
+  const btnAplicarValidacao3a = document.getElementById('btn-aplicar-validacao-3a');
+  if (btnAplicarValidacao3a) btnAplicarValidacao3a.onclick = async () => {
+    const motivo = document.getElementById('validar-motivo').value.trim();
+    if (!motivo) { alert('Informe o motivo do ajuste.'); return; }
+    const inv = currentInventory();
+    const codigo = state._corrigirCodigo;
+    const round = state._validarSubstituirRound;
+    const s = productStatus(inv, codigo);
+    const oldTotal = round === 1 ? s.t1 : s.t2;
+    btnAplicarValidacao3a.disabled = true; btnAplicarValidacao3a.textContent = 'APLICANDO...';
+    // Apaga de vez os lançamentos antigos dessa contagem (não deixa nada
+    // "por baixo" que possa somar errado depois) e só então registra a
+    // correção, com o motivo e o valor antigo preservados para auditoria.
+    await excluirTodosLancamentosRodada(inv.id, codigo, round);
+    await salvarCorrecaoSupabase(inv.id, codigo, round, oldTotal, s.t3, `[3ª validada pelo administrador — lançamentos antigos da ${round}ª excluídos] ${motivo}`);
+    state._corrigirCodigo = null;
+    state._validar3a = false;
+    state._validarSubstituirRound = null;
+    render();
+  };
   const btnSalvarCorr = document.getElementById('btn-salvar-correcao');
   if (btnSalvarCorr) btnSalvarCorr.onclick = async () => {
     const novoTotal = +document.getElementById('corr-novo-total').value;
