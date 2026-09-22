@@ -118,8 +118,19 @@ async function buscarTudoPaginado(criarQuery, tamanhoPagina = 1000) {
   let tudo = [];
   let inicio = 0;
   while (true) {
-    const { data, error } = await criarQuery().range(inicio, inicio + tamanhoPagina - 1);
-    if (error) { console.error('[paginacao] erro:', error); return tudo; }
+    let data, error;
+    let tentativas = 0;
+    while (tentativas < 3) {
+      ({ data, error } = await criarQuery().range(inicio, inicio + tamanhoPagina - 1));
+      if (!error) break;
+      tentativas++;
+      console.error(`[paginacao] erro na tentativa ${tentativas}/3 (linhas ${inicio}+):`, error);
+      if (tentativas < 3) await new Promise(r => setTimeout(r, 800 * tentativas));
+    }
+    if (error) {
+      showToast('Falha ao carregar todos os dados — alguns produtos podem estar faltando. Atualize a página e tente de novo antes de gerar relatórios.', true, 9000);
+      return tudo;
+    }
     tudo = tudo.concat(data || []);
     if (!data || data.length < tamanhoPagina) break;
     inicio += tamanhoPagina;
@@ -375,27 +386,39 @@ function calcularProductStatus(inv, codigo) {
   let status = 'AGUARDANDO 1ª';
   let final = null;
 
-  if (!c1) {
-    status = 'AGUARDANDO 1ª';
-  } else if (!inv.roundClosed[1] || !c2) {
-    status = inv.roundClosed[1] ? 'AGUARDANDO 2ª' : 'EM CONTAGEM (1ª)';
+  if (!inv.roundClosed[1]) {
+    // 1ª contagem ainda rolando — nada de errado em não ter dado ainda.
+    status = c1 ? 'EM CONTAGEM (1ª)' : 'AGUARDANDO 1ª';
   } else if (!inv.roundClosed[2]) {
-    status = 'EM CONTAGEM (2ª)';
-  } else if (t1 === t2) {
-    status = 'FINALIZADO'; final = t1; t3 = t1;
-  } else if (!c3) {
-    status = 'AGUARDANDO 3ª';
-  } else if (t3 !== t1 && t3 !== t2) {
-    status = 'DIVERGÊNCIA CRÍTICA';
-  } else if (!inv.roundClosed[3]) {
-    status = 'EM CONTAGEM (3ª)';
+    // 1ª já fechada; 2ª ainda rolando.
+    status = c2 ? 'EM CONTAGEM (2ª)' : 'AGUARDANDO 2ª';
   } else {
-    status = 'FINALIZADO'; final = t3;
+    // As duas primeiras contagens já fecharam: aqui não pode sobrar produto
+    // "esperando" pra sempre — se faltou uma delas, ou elas não batem,
+    // sempre exige 3ª contagem (recontagem definitiva).
+    const precisaTerceira = !c1 || !c2 || t1 !== t2;
+    if (!precisaTerceira) {
+      status = 'FINALIZADO'; final = t1; t3 = t1;
+    } else if (!c3) {
+      status = 'AGUARDANDO 3ª';
+    } else if (!inv.roundClosed[3]) {
+      status = 'EM CONTAGEM (3ª)';
+    } else {
+      const referencias = [];
+      if (c1) referencias.push(t1);
+      if (c2) referencias.push(t2);
+      const bateComAlguma = referencias.length === 0 || referencias.includes(t3);
+      if (!bateComAlguma) {
+        status = 'DIVERGÊNCIA CRÍTICA';
+      } else {
+        status = 'FINALIZADO'; final = t3;
+      }
+    }
   }
 
   return {
     t1, t2, t3, final, status,
-    divergente: c1 && c2 && inv.roundClosed[2] && t1 !== t2,
+    divergente: inv.roundClosed[1] && inv.roundClosed[2] && (!c1 || !c2 || t1 !== t2),
     alertaCritico: status === 'DIVERGÊNCIA CRÍTICA',
   };
 }
@@ -598,13 +621,17 @@ function viewLogin() {
       <div style="color:#AFC3E0;font-size:13px;">Controle de estoque</div>
     </div>
     <div class="card" style="position:relative;z-index:1;">
-      <div class="field"><label>Seu nome</label><input id="login-nome" placeholder="Ex: João Silva" /></div>
       <div class="field">
         <label>Perfil</label>
         <select id="login-role">
           <option value="inventariar">Inventariar</option>
           <option value="gerenciar">Gerenciar</option>
         </select>
+      </div>
+      <div class="field" id="campo-nome-individual"><label>Seu nome</label><input id="login-nome" placeholder="Ex: João Silva" /></div>
+      <div id="campos-dupla" style="display:none;">
+        <div class="field"><label>Apontador</label><input id="login-apontador" placeholder="Nome de quem aponta" /></div>
+        <div class="field"><label>Contador</label><input id="login-contador" placeholder="Nome de quem conta" /></div>
       </div>
       <button class="btn btn-primary" id="btn-entrar">ENTRAR</button>
       <div style="font-size:11px;color:var(--texto-suave);text-align:center;margin-top:10px;">
@@ -614,9 +641,28 @@ function viewLogin() {
   </div>`;
 }
 function bindLogin() {
+  const selectRole = document.getElementById('login-role');
+  const campoNome = document.getElementById('campo-nome-individual');
+  const camposDupla = document.getElementById('campos-dupla');
+  const atualizarCampos = () => {
+    const ehDupla = selectRole.value === 'inventariar';
+    campoNome.style.display = ehDupla ? 'none' : '';
+    camposDupla.style.display = ehDupla ? '' : 'none';
+  };
+  atualizarCampos();
+  selectRole.addEventListener('change', atualizarCampos);
+
   document.getElementById('btn-entrar').onclick = async () => {
-    const nome = document.getElementById('login-nome').value.trim() || 'Usuário';
-    const role = document.getElementById('login-role').value;
+    const role = selectRole.value;
+    let nome;
+    if (role === 'inventariar') {
+      const apontador = document.getElementById('login-apontador').value.trim();
+      const contador = document.getElementById('login-contador').value.trim();
+      if (!apontador || !contador) { showToast('Informe o nome do apontador e do contador.', true); return; }
+      nome = `${apontador} / ${contador}`;
+    } else {
+      nome = document.getElementById('login-nome').value.trim() || 'Usuário';
+    }
     const btn = document.getElementById('btn-entrar');
     btn.disabled = true; btn.textContent = 'ENTRANDO...';
     try {
@@ -763,7 +809,9 @@ function viewGerenciarInventario(inv) {
       </div>
     </div>
     <button class="btn btn-primary" id="btn-export-xlsx" style="margin-bottom:8px;">RELATÓRIO COMPLETO (EXCEL — RESUMO + DETALHAMENTO)</button>
-    <button class="btn btn-ghost" id="btn-export-csv" style="margin-bottom:12px;">EXCEL DOS LANÇAMENTOS ATUAIS (CSV)</button>
+    <button class="btn btn-outline" id="btn-atualizar-dados" style="margin-bottom:14px;">🔄 ATUALIZAR DADOS (antes de gerar relatórios)</button>
+    <button class="btn btn-ghost" id="btn-export-acompanhamento" style="margin-bottom:8px;">RELATÓRIO DE ACOMPANHAMENTO (1 LINHA POR PRODUTO, COM LOCALIZAÇÃO E QUEM CONTOU)</button>
+    <button class="btn btn-ghost" id="btn-export-csv" style="margin-bottom:12px;">EXCEL DOS LANÇAMENTOS ATUAIS (CSV — detalhado, uma linha por leitura)</button>
     <div class="meta" style="font-weight:600;margin-bottom:8px;">Baixar só uma contagem</div>
     <div style="display:flex;gap:8px;margin-bottom:16px;">
       <button class="btn btn-outline btn-sm" data-export-round="1" style="flex:1;">1ª CONTAGEM</button>
@@ -976,7 +1024,7 @@ function viewInventariar() {
     ` : `
       <div style="padding-bottom:76px;">
         <div class="icon-toolbar">
-          <button data-abrir-popup="local"><span class="ic">📌</span><span>Local</span></button>
+          <button data-abrir-popup="local"><span class="ic">📌</span><span>${['Pátio','Almoxarifado','Vitrine'].includes(state.arvore) ? state.arvore : (state.arvore ? `Árv.${state.arvore}${state.lado ? '/' + state.lado : ''}` : 'Local')}</span></button>
           <button data-abrir-popup="avaria"><span class="ic">⚠️</span><span>Avaria</span></button>
           <button data-abrir-popup="contagem"><span class="ic">🔄</span><span>${state.currentRound}ª contagem</span></button>
         </div>
@@ -1020,9 +1068,22 @@ function popupInventariar(inv, rodadaHabilitada) {
   let titulo = '', conteudo = '';
   if (state._popupAberto === 'local') {
     titulo = 'Localização';
+    const especiais = ['Pátio', 'Almoxarifado', 'Vitrine'];
+    const tipoAtual = especiais.includes(state.arvore) ? state.arvore : 'Árvore';
     conteudo = `
-      <div class="field"><label>Árvore</label><input id="input-arvore" placeholder="Ex: 1" value="${state.arvore}" /></div>
-      <div class="field"><label>Lado</label><input id="input-lado" placeholder="Ex: B" value="${state.lado}" /></div>
+      <div class="field">
+        <label>Tipo de local</label>
+        <select id="input-tipo-local">
+          <option value="Árvore" ${tipoAtual==='Árvore'?'selected':''}>🌳 Árvore</option>
+          <option value="Pátio" ${tipoAtual==='Pátio'?'selected':''}>🪵 Pátio (mercadoria no chão)</option>
+          <option value="Almoxarifado" ${tipoAtual==='Almoxarifado'?'selected':''}>📦 Almoxarifado</option>
+          <option value="Vitrine" ${tipoAtual==='Vitrine'?'selected':''}>🪟 Vitrine</option>
+        </select>
+      </div>
+      <div id="campos-arvore-lado" style="${tipoAtual==='Árvore'?'':'display:none;'}">
+        <div class="field"><label>Árvore</label><input id="input-arvore" placeholder="Ex: 1" value="${tipoAtual==='Árvore'?state.arvore:''}" /></div>
+        <div class="field"><label>Lado</label><input id="input-lado" placeholder="Ex: B" value="${state.lado}" /></div>
+      </div>
       <button class="btn btn-lima" id="btn-confirmar-popup">CONFIRMAR</button>`;
   } else if (state._popupAberto === 'avaria') {
     titulo = 'Avaria';
@@ -1229,6 +1290,16 @@ function bindGlobal() {
   });
   const btnExportCsv = document.getElementById('btn-export-csv');
   if (btnExportCsv) btnExportCsv.onclick = () => exportLancamentosCsv(currentInventory());
+  const btnAtualizarDados = document.getElementById('btn-atualizar-dados');
+  if (btnAtualizarDados) btnAtualizarDados.onclick = async () => {
+    btnAtualizarDados.disabled = true; btnAtualizarDados.textContent = 'ATUALIZANDO...';
+    await refreshInventories({ completo: true });
+    btnAtualizarDados.disabled = false; btnAtualizarDados.textContent = '🔄 ATUALIZAR DADOS (antes de gerar relatórios)';
+    showToast('Dados atualizados.');
+    render();
+  };
+  const btnExportAcompanhamento = document.getElementById('btn-export-acompanhamento');
+  if (btnExportAcompanhamento) btnExportAcompanhamento.onclick = () => exportAcompanhamentoCsv(currentInventory());
   const btnExportXlsx = document.getElementById('btn-export-xlsx');
   if (btnExportXlsx) btnExportXlsx.onclick = () => exportRelatorioCompletoXlsx(currentInventory());
   document.getElementById('btn-excluir-inventario')?.addEventListener('click', () => {
@@ -1385,12 +1456,24 @@ function bindGlobal() {
   });
   document.querySelectorAll('[data-abrir-popup]').forEach(b => b.onclick = () => { state._popupAberto = b.dataset.abrirPopup; render(); });
   document.getElementById('btn-fechar-popup')?.addEventListener('click', () => { state._popupAberto = null; render(); });
+  document.getElementById('input-tipo-local')?.addEventListener('change', e => {
+    const campos = document.getElementById('campos-arvore-lado');
+    if (campos) campos.style.display = e.target.value === 'Árvore' ? '' : 'none';
+  });
   document.getElementById('btn-confirmar-popup')?.addEventListener('click', () => {
+    const inputTipoLocal = document.getElementById('input-tipo-local');
     const inputArvore = document.getElementById('input-arvore');
     const inputLado = document.getElementById('input-lado');
     const inputAvaria = document.getElementById('input-avaria');
-    if (inputArvore) state.arvore = inputArvore.value.trim();
-    if (inputLado) state.lado = inputLado.value.trim();
+    if (inputTipoLocal) {
+      if (inputTipoLocal.value === 'Árvore') {
+        state.arvore = (inputArvore?.value || '').trim();
+        state.lado = (inputLado?.value || '').trim();
+      } else {
+        state.arvore = inputTipoLocal.value;
+        state.lado = '';
+      }
+    }
     if (inputAvaria) state.qtdAvaria = inputAvaria.value.trim();
     state._popupAberto = null;
     render();
@@ -1578,6 +1661,25 @@ function exportTxtRotina1147(inv, round) {
   });
 
   downloadTxt(`inventario_${inv.numero}_${round}a_contagem_rotina1147.txt`, linhas.join('\r\n'));
+}
+
+function exportAcompanhamentoCsv(inv) {
+  if (!inv) return;
+  const rows = [['CODPROD','REFERENCIA','DESCRICAO','LOCALIZACOES','QTD_1A','QUEM_CONTOU_1A','QTD_2A','QUEM_CONTOU_2A','QTD_3A','QUEM_CONTOU_3A','STATUS']];
+  inv.products.forEach(p => {
+    const s = productStatus(inv, p.codigo);
+    const entradasProduto = inv.entries.filter(e => e.codigo === p.codigo);
+    const locs = [...new Set(entradasProduto.filter(e => e.arvore || e.lado).map(e => `${e.arvore || '-'}/${e.lado || '-'}`))].join('; ');
+    const quemDaRodada = round => [...new Set(entradasProduto.filter(e => e.round === round).map(e => e.userName))].join(', ');
+    rows.push([
+      p.codigo, p.referencia, p.descricao, locs || '-',
+      s.t1 ? formatNumeroBR(s.t1) : '', quemDaRodada(1),
+      s.t2 ? formatNumeroBR(s.t2) : '', quemDaRodada(2),
+      s.t3 ? formatNumeroBR(s.t3) : '', quemDaRodada(3),
+      s.status,
+    ]);
+  });
+  downloadCsv(`inventario_${inv.numero}_acompanhamento.csv`, rows);
 }
 
 function exportLancamentosCsv(inv) {
