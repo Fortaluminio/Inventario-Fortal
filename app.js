@@ -211,19 +211,29 @@ async function criarInventarioSupabase(numero, produtos) {
     const numeroLote = Math.floor(i / TAMANHO_LOTE) + 1;
     const totalLotes = Math.ceil(rows.length / TAMANHO_LOTE);
     console.log(`[import] enviando lote ${numeroLote}/${totalLotes} (${lote.length} produtos, itens ${i + 1} a ${i + lote.length})...`);
-    try {
-      const { error: e2, status, statusText } = await sb.from('inventory_products').insert(lote);
-      if (e2) {
-        console.error(`[import] ERRO no lote ${numeroLote}/${totalLotes}:`, e2, 'status:', status, statusText);
-        showToast(`Erro no lote ${numeroLote} de ${totalLotes} (parou em ${i} de ${rows.length} produtos): ` + e2.message, true, 9000);
-        return false;
+
+    let sucesso = false, ultimoErro = null;
+    for (let tentativa = 1; tentativa <= 3; tentativa++) {
+      try {
+        const { error: e2, status, statusText } = await sb.from('inventory_products').insert(lote);
+        if (!e2) { sucesso = true; break; }
+        ultimoErro = e2;
+        console.error(`[import] erro no lote ${numeroLote}/${totalLotes}, tentativa ${tentativa}/3:`, e2, 'status:', status, statusText);
+      } catch (err) {
+        ultimoErro = err;
+        console.error(`[import] exceção no lote ${numeroLote}/${totalLotes}, tentativa ${tentativa}/3:`, err);
       }
-      console.log(`[import] lote ${numeroLote}/${totalLotes} OK.`);
-    } catch (err) {
-      console.error(`[import] EXCEÇÃO no lote ${numeroLote}/${totalLotes}:`, err);
-      showToast(`Falha de conexão no lote ${numeroLote} de ${totalLotes} (parou em ${i} de ${rows.length} produtos). Tente de novo.`, true, 9000);
+      if (tentativa < 3) {
+        showToast(`Instabilidade no lote ${numeroLote}/${totalLotes} — tentando de novo (${tentativa}/3)...`, true, 2000);
+        await new Promise(r => setTimeout(r, 1000 * tentativa));
+      }
+    }
+    if (!sucesso) {
+      console.error(`[import] lote ${numeroLote}/${totalLotes} falhou depois de 3 tentativas.`, ultimoErro);
+      showToast(`Falha no lote ${numeroLote} de ${totalLotes} mesmo após 3 tentativas (parou em ${i} de ${rows.length} produtos). Exclua este inventário e tente importar de novo.`, true, 10000);
       return false;
     }
+    console.log(`[import] lote ${numeroLote}/${totalLotes} OK.`);
     if (rows.length > TAMANHO_LOTE) {
       showToast(`Importando... ${Math.min(i + TAMANHO_LOTE, rows.length)} de ${rows.length}`, false, 1500);
     }
