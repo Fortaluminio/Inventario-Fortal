@@ -405,9 +405,14 @@ function calcularProductStatus(inv, codigo) {
   } else {
     // As duas primeiras contagens já fecharam: aqui não pode sobrar produto
     // "esperando" pra sempre — se faltou uma delas, ou elas não batem,
-    // sempre exige 3ª contagem (recontagem definitiva).
-    const precisaTerceira = !c1 || !c2 || t1 !== t2;
-    if (!precisaTerceira) {
+    // sempre exige 3ª contagem (recontagem definitiva). Mas só faz sentido
+    // exigir 3ª se pelo menos uma das duas primeiras realmente aconteceu —
+    // se nenhuma delas foi feita, não tem o que comparar na 3ª ainda.
+    const algumaContagemExiste = c1 || c2;
+    const precisaTerceira = algumaContagemExiste && (!c1 || !c2 || t1 !== t2);
+    if (!algumaContagemExiste) {
+      status = 'NÃO CONTADO';
+    } else if (!precisaTerceira) {
       status = 'FINALIZADO'; final = t1; t3 = t1;
     } else if (!c3) {
       status = 'AGUARDANDO 3ª';
@@ -428,7 +433,7 @@ function calcularProductStatus(inv, codigo) {
 
   return {
     t1, t2, t3, final, status,
-    divergente: inv.roundClosed[1] && inv.roundClosed[2] && (!c1 || !c2 || t1 !== t2),
+    divergente: inv.roundClosed[1] && inv.roundClosed[2] && (c1 || c2) && (!c1 || !c2 || t1 !== t2),
     alertaCritico: status === 'DIVERGÊNCIA CRÍTICA',
   };
 }
@@ -874,6 +879,7 @@ function viewGerenciarInventario(inv) {
           <option value="EM CONTAGEM (2ª)" ${statusFiltro==='EM CONTAGEM (2ª)'?'selected':''}>Em contagem (2ª)</option>
           <option value="AGUARDANDO 3ª" ${statusFiltro==='AGUARDANDO 3ª'?'selected':''}>⚠️ Aguardando 3ª (divergência)</option>
           <option value="EM CONTAGEM (3ª)" ${statusFiltro==='EM CONTAGEM (3ª)'?'selected':''}>Em contagem (3ª)</option>
+          <option value="NÃO CONTADO" ${statusFiltro==='NÃO CONTADO'?'selected':''}>⬜ Não contado (nem 1ª nem 2ª)</option>
           <option value="DIVERGÊNCIA CRÍTICA" ${statusFiltro==='DIVERGÊNCIA CRÍTICA'?'selected':''}>🔴 Divergência crítica</option>
           <option value="FINALIZADO" ${statusFiltro==='FINALIZADO'?'selected':''}>✓ Finalizado</option>
         </select>
