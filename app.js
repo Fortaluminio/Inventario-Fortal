@@ -36,36 +36,70 @@ function withTimeout(promise, ms, message) {
   ]);
 }
 
-async function ensureAuth() {
+/* Login por usuário e senha. O administrador (Gerenciar) cria os usuários na aba
+   "Usuários". Por trás, o Supabase Auth usa um e-mail interno gerado a partir do
+   nome de usuário (ninguém precisa ter e-mail de verdade). */
+const EMAIL_DOMINIO = 'inventario.fortalaluminio.digital';
+function normalizarUsuario(u) { return String(u || '').trim().toLowerCase(); }
+function usuarioParaEmail(u) { return `${normalizarUsuario(u)}@${EMAIL_DOMINIO}`; }
+
+async function loadProfile(userId) {
+  const { data } = await withTimeout(
+    sb.from('profiles').select('*').eq('id', userId).maybeSingle(),
+    12000, 'Servidor demorando para responder. Tente novamente.'
+  );
+  return data;
+}
+
+async function entrarComSenha(usuario, senha) {
+  const { data, error } = await withTimeout(
+    sb.auth.signInWithPassword({ email: usuarioParaEmail(usuario), password: senha }),
+    15000, 'Servidor demorando para responder. Tente novamente.'
+  );
+  if (error) {
+    const msg = String(error.message || '');
+    if (/banned/i.test(msg)) throw new Error('Acesso desativado. Fale com o administrador.');
+    if (/invalid login|credentials/i.test(msg)) throw new Error('Usuário ou senha incorretos.');
+    throw new Error('Não foi possível entrar: ' + msg);
+  }
+  const perfil = await loadProfile(data.user.id);
+  if (!perfil || !perfil.ativo || !perfil.usuario) {
+    await sb.auth.signOut();
+    throw new Error('Este usuário não tem acesso ao inventário. Fale com o administrador.');
+  }
+  return perfil;
+}
+
+/* Equipe de contagem (dupla): o login é compartilhado, mas o app pede o nome do
+   Apontador e do Contador. O nome gravado em cada lançamento é "Apontador / Contador". */
+const DUPLA_KEY = 'if_dupla';
+function lerDuplaSalva(userId) {
   try {
-    let { data: { session } } = await withTimeout(sb.auth.getSession(), 12000, 'Servidor demorando para responder. Tente novamente.');
-    if (!session) {
-      const { data, error } = await withTimeout(sb.auth.signInAnonymously(), 12000, 'Servidor demorando para responder (login). Tente novamente.');
-      if (error) throw error;
-      session = data.session;
-    }
-    return session;
-  } catch (err) {
-    console.error('Falha no login anônimo:', err);
-    return null;
+    const d = JSON.parse(localStorage.getItem(DUPLA_KEY) || 'null');
+    return d && d.userId === userId ? d : null;
+  } catch (e) { return null; }
+}
+
+function aplicarPerfil(perfil, restaurarDupla) {
+  currentProfile = { ...perfil, nomeCadastro: perfil.nome };
+  state._precisaDupla = false;
+  if (perfil.role === 'inventariar') {
+    const d = restaurarDupla ? lerDuplaSalva(perfil.id) : null;
+    if (d) currentProfile.nome = `${d.apontador} / ${d.contador}`;
+    else { localStorage.removeItem(DUPLA_KEY); state._precisaDupla = true; }
+  } else {
+    localStorage.removeItem(DUPLA_KEY);
   }
 }
 
-async function loadProfile(userId) {
-  const { data } = await sb.from('profiles').select('*').eq('id', userId).maybeSingle();
-  return data;
-}
-
-async function criarProfile(nome, role) {
-  let { data: { session } } = await withTimeout(sb.auth.getSession(), 12000, 'Servidor demorando para responder. Tente novamente.');
-  if (!session) session = await ensureAuth();
-  if (!session) throw new Error('Não foi possível autenticar (servidor lento ou "Anonymous Sign-Ins" desativado). Tente novamente em instantes.');
-  const { data, error } = await withTimeout(
-    sb.from('profiles').upsert({ id: session.user.id, nome, role }).select().single(),
-    12000, 'Servidor demorando para salvar o perfil. Tente novamente.'
-  );
-  if (error) throw new Error('Não foi possível salvar o perfil: ' + error.message);
-  return data;
+async function sairDoApp() {
+  localStorage.removeItem(DUPLA_KEY);
+  try { await sb.auth.signOut(); } catch (e) { /* segue mesmo offline */ }
+  currentProfile = null;
+  state._precisaDupla = false;
+  state.tab = 'inventarios';
+  state.currentInventoryId = null;
+  render();
 }
 
 /* ---------------- CATÁLOGO LOCAL (não muda com frequência) ---------------- */
@@ -319,8 +353,10 @@ function refreshInventoriesDebounced(completo = false) {
   _refreshDebounceTimer = setTimeout(() => { refreshInventories({ completo }); }, 2000);
 }
 
+let _canalTempoReal = null;
 function assinarTempoReal() {
-  sb.channel('inventario-fortal-mudancas')
+  if (_canalTempoReal) { try { sb.removeChannel(_canalTempoReal); } catch (e) {} _canalTempoReal = null; }
+  _canalTempoReal = sb.channel('inventario-fortal-mudancas')
     .on('postgres_changes', { event: '*', schema: 'public', table: 'inventories' }, () => refreshInventoriesDebounced(true))
     .on('postgres_changes', { event: '*', schema: 'public', table: 'inventory_products' }, () => refreshInventoriesDebounced(true))
     .on('postgres_changes', { event: '*', schema: 'public', table: 'count_entries' }, () => refreshInventoriesDebounced(false))
@@ -589,6 +625,10 @@ const state = {
   volumeLinhas: [],
   _volumesExpandida: true,
   _popupAberto: null,
+  usuariosLista: [],
+  _usuarioPopup: null,   // null | 'novo' | id do usuário
+  _usuarioAcao: null,    // null | 'senha' | 'perfil' | 'ativo'
+  _precisaDupla: false,
   arvore: '',
   lado: '',
   gerenciarTab: 'resumo',
@@ -613,20 +653,23 @@ const app = document.getElementById('app');
 
 function render() {
   if (!currentProfile) { app.innerHTML = viewLogin(); bindLogin(); return; }
+  if (state._precisaDupla) { app.innerHTML = viewDupla(); bindDupla(); return; }
 
   let body = '';
   if (state.tab === 'inventarios') body = viewInventarios();
   else if (state.tab === 'inventariar') body = viewInventariar();
   else if (state.tab === 'relatorios' && currentProfile.role === 'gerenciar') body = viewRelatorios();
+  else if (state.tab === 'usuarios' && currentProfile.role === 'gerenciar') body = viewUsuarios();
   else if (state.tab === 'perfil') body = viewPerfil();
   else body = viewInventarios();
 
   app.innerHTML = body;
   bindGlobal();
+  bindUsuarios();
 }
 
 /* ---- LOGIN ---- */
-function viewLogin() {
+function telaFundoLogin(conteudoCard) {
   return `
   <div style="display:flex;flex-direction:column;justify-content:center;min-height:100vh;padding:32px;background:var(--azul-escuro);position:relative;overflow:hidden;">
     <img src="assets/brand/marca-dagua-f.png" style="position:absolute;top:-60px;right:-90px;width:320px;opacity:0.07;pointer-events:none;" />
@@ -635,61 +678,84 @@ function viewLogin() {
       <img src="assets/brand/lockup-login-transp.png" alt="Fortal Alumínio" style="width:100%;max-width:290px;margin:0 auto 10px;display:block;" />
       <div style="color:#AFC3E0;font-size:13px;">Controle de estoque</div>
     </div>
-    <div class="card" style="position:relative;z-index:1;">
-      <div class="field">
-        <label>Perfil</label>
-        <select id="login-role">
-          <option value="inventariar">Inventariar</option>
-          <option value="gerenciar">Gerenciar</option>
-        </select>
-      </div>
-      <div class="field" id="campo-nome-individual"><label>Seu nome</label><input id="login-nome" placeholder="Ex: João Silva" /></div>
-      <div id="campos-dupla" style="display:none;">
-        <div class="field"><label>Apontador</label><input id="login-apontador" placeholder="Nome de quem aponta" /></div>
-        <div class="field"><label>Contador</label><input id="login-contador" placeholder="Nome de quem conta" /></div>
-      </div>
-      <button class="btn btn-primary" id="btn-entrar">ENTRAR</button>
-      <div style="font-size:11px;color:var(--texto-suave);text-align:center;margin-top:10px;">
-        Conectado ao banco compartilhado — todos os celulares veem o mesmo inventário.
-      </div>
-    </div>
+    <div class="card" style="position:relative;z-index:1;">${conteudoCard}</div>
   </div>`;
 }
-function bindLogin() {
-  const selectRole = document.getElementById('login-role');
-  const campoNome = document.getElementById('campo-nome-individual');
-  const camposDupla = document.getElementById('campos-dupla');
-  const atualizarCampos = () => {
-    const ehDupla = selectRole.value === 'inventariar';
-    campoNome.style.display = ehDupla ? 'none' : '';
-    camposDupla.style.display = ehDupla ? '' : 'none';
-  };
-  atualizarCampos();
-  selectRole.addEventListener('change', atualizarCampos);
 
-  document.getElementById('btn-entrar').onclick = async () => {
-    const role = selectRole.value;
-    let nome;
-    if (role === 'inventariar') {
-      const apontador = document.getElementById('login-apontador').value.trim();
-      const contador = document.getElementById('login-contador').value.trim();
-      if (!apontador || !contador) { showToast('Informe o nome do apontador e do contador.', true); return; }
-      nome = `${apontador} / ${contador}`;
-    } else {
-      nome = document.getElementById('login-nome').value.trim() || 'Usuário';
-    }
+function viewLogin() {
+  return telaFundoLogin(`
+      <div class="field">
+        <label>Usuário</label>
+        <input id="login-usuario" type="text" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" placeholder="Seu usuário" />
+      </div>
+      <div class="field" style="position:relative;">
+        <label>Senha</label>
+        <input id="login-senha" type="password" autocomplete="current-password" placeholder="Sua senha" style="padding-right:48px;" />
+        <button type="button" id="btn-ver-senha" aria-label="Mostrar senha" style="position:absolute;right:6px;top:30px;width:40px;height:44px;background:none;border:none;font-size:18px;opacity:.55;">👁</button>
+      </div>
+      <button class="btn btn-primary" id="btn-entrar">ENTRAR</button>
+      <div style="font-size:11px;color:var(--texto-suave);text-align:center;margin-top:12px;">
+        Acesso restrito. Peça seu usuário e senha ao administrador.
+      </div>`);
+}
+
+async function concluirEntrada() {
+  await refreshInventories();
+  assinarTempoReal();
+  state.tab = 'inventarios';
+  render();
+}
+
+function bindLogin() {
+  const campoSenha = document.getElementById('login-senha');
+  const campoUsuario = document.getElementById('login-usuario');
+  document.getElementById('btn-ver-senha').onclick = () => {
+    campoSenha.type = campoSenha.type === 'password' ? 'text' : 'password';
+  };
+  const entrar = async () => {
+    const usuario = campoUsuario.value;
+    const senha = campoSenha.value;
+    if (!normalizarUsuario(usuario) || !senha) { showToast('Informe o usuário e a senha.', true); return; }
     const btn = document.getElementById('btn-entrar');
     btn.disabled = true; btn.textContent = 'ENTRANDO...';
     try {
-      currentProfile = await criarProfile(nome, role);
-      await refreshInventories();
-      state.tab = 'inventarios';
-      render();
+      const perfil = await entrarComSenha(usuario, senha);
+      aplicarPerfil(perfil, false);
+      if (state._precisaDupla) { render(); return; }
+      await concluirEntrada();
     } catch (err) {
       console.error(err);
       btn.disabled = false; btn.textContent = 'ENTRAR';
       showToast(err.message || 'Não foi possível entrar. Tente novamente.', true);
     }
+  };
+  document.getElementById('btn-entrar').onclick = entrar;
+  [campoUsuario, campoSenha].forEach(c => c.addEventListener('keydown', e => { if (e.key === 'Enter') entrar(); }));
+}
+
+/* Etapa da equipe de contagem (só para o perfil Inventariar) */
+function viewDupla() {
+  return telaFundoLogin(`
+      <h3 style="margin:0 0 4px;font-size:17px;">Quem está contando agora?</h3>
+      <div class="meta" style="margin-bottom:16px;">Acesso: <b>@${currentProfile.usuario}</b> (equipe de contagem)</div>
+      <div class="field"><label>Apontador</label><input id="login-apontador" placeholder="Nome de quem aponta" autocomplete="off" /></div>
+      <div class="field"><label>Contador</label><input id="login-contador" placeholder="Nome de quem conta" autocomplete="off" /></div>
+      <button class="btn btn-primary" id="btn-continuar-dupla">CONTINUAR</button>
+      <button class="btn btn-ghost" id="btn-sair-dupla" style="margin-top:6px;font-size:14px;">Sair</button>`);
+}
+function bindDupla() {
+  document.getElementById('btn-sair-dupla').onclick = sairDoApp;
+  document.getElementById('btn-continuar-dupla').onclick = async () => {
+    const apontador = document.getElementById('login-apontador').value.trim();
+    const contador = document.getElementById('login-contador').value.trim();
+    if (!apontador || !contador) { showToast('Informe o nome do apontador e do contador.', true); return; }
+    localStorage.setItem(DUPLA_KEY, JSON.stringify({ userId: currentProfile.id, apontador, contador }));
+    currentProfile.nome = `${apontador} / ${contador}`;
+    state._precisaDupla = false;
+    const btn = document.getElementById('btn-continuar-dupla');
+    btn.disabled = true; btn.textContent = 'ENTRANDO...';
+    try { await concluirEntrada(); }
+    catch (err) { btn.disabled = false; btn.textContent = 'CONTINUAR'; showToast(err.message || 'Erro ao entrar.', true); }
   };
 }
 
@@ -698,7 +764,7 @@ function tabbar() {
   const tabs = [
     { id: 'inventarios', ic: '📋', label: 'Inventários' },
     { id: 'inventariar', ic: '📷', label: 'Inventariar' },
-    ...(currentProfile.role === 'gerenciar' ? [{ id: 'relatorios', ic: '📊', label: 'Relatórios' }] : []),
+    ...(currentProfile.role === 'gerenciar' ? [{ id: 'relatorios', ic: '📊', label: 'Relatórios' }, { id: 'usuarios', ic: '🔑', label: 'Usuários' }] : []),
     { id: 'perfil', ic: '👤', label: 'Perfil' },
   ];
   return `<div class="tabbar">${tabs.map(t => `
@@ -1176,7 +1242,7 @@ function viewPerfil() {
   return `
   <div class="topbar"><div class="titles">${brandIcon()}<h1>Perfil</h1></div></div>
   <div class="content">
-    <div class="card"><h3>${currentProfile.nome}</h3><div class="meta">Perfil: ${currentProfile.role === 'gerenciar' ? 'Gerenciar' : 'Inventariar'}</div></div>
+    <div class="card"><h3>${esc(currentProfile.nome)}</h3><div class="meta">Acesso: @${esc(currentProfile.usuario)} · Perfil: ${currentProfile.role === 'gerenciar' ? 'Gerenciar' : 'Inventariar'}</div></div>
     <button class="btn btn-outline" id="btn-sair" style="margin-bottom:18px;">SAIR</button>
     ${currentProfile.role === 'inventariar' ? `
       <div class="meta" style="font-weight:600;margin-bottom:8px;">Produtos que eu contei (${minhasEntradas.length})</div>
@@ -1200,15 +1266,155 @@ function viewPerfil() {
   ${tabbar()}`;
 }
 
+/* ---- USUÁRIOS (só Gerenciar) ---- */
+function esc(t) {
+  return String(t ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+async function carregarUsuarios() {
+  const { data, error } = await sb.from('profiles')
+    .select('id,nome,usuario,role,ativo,created_at')
+    .not('usuario', 'is', null)
+    .order('nome');
+  if (error) { showToast('Não foi possível carregar os usuários: ' + error.message, true, 4000); return; }
+  state.usuariosLista = data || [];
+}
+
+function rotuloPerfil(role) { return role === 'gerenciar' ? 'Gerenciar' : 'Inventariar'; }
+function classeBadgePerfil(u) {
+  if (!u.ativo) return 'badge-erro';
+  return u.role === 'gerenciar' ? 'badge-andamento' : 'badge-sucesso';
+}
+
+function cardUsuario(u) {
+  return `<div class="card" data-editar-usuario="${u.id}" style="display:flex;justify-content:space-between;align-items:center;gap:10px;cursor:pointer;">
+    <div style="min-width:0;">
+      <h3>${esc(u.nome)}${u.id === currentProfile.id ? ' <span style="color:var(--texto-suave);font-weight:500;">(você)</span>' : ''}</h3>
+      <div class="meta">@${esc(u.usuario)}${u.ativo ? '' : ' · desativado'}</div>
+    </div>
+    <span class="badge ${classeBadgePerfil(u)}">${rotuloPerfil(u.role)}</span>
+  </div>`;
+}
+
+function viewUsuarios() {
+  const lista = state.usuariosLista;
+  return `
+  <div class="topbar"><div class="titles">${brandIcon()}<h1>Usuários</h1></div></div>
+  <div class="content">
+    ${lista.length === 0 ? emptyState('🔑', 'Nenhum usuário cadastrado ainda') : lista.map(cardUsuario).join('')}
+  </div>
+  <button class="fab" id="fab-novo-usuario">+</button>
+  ${popupUsuario()}
+  ${tabbar()}`;
+}
+
+function popupUsuario() {
+  const alvo = state._usuarioPopup;
+  if (!alvo) return '';
+  const fechar = `<button id="btn-fechar-popup-usuario" class="popup-close">✕</button>`;
+  const envolver = (inner) => `<div class="popup-overlay"><div class="popup-card" style="max-width:340px;width:88%;">${inner}</div></div>`;
+  const btnPeq = 'padding:13px;font-size:15px;';
+
+  if (alvo === 'novo') {
+    return envolver(`
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;"><h3 style="margin:0;font-size:17px;">Novo usuário</h3>${fechar}</div>
+      <div class="field" style="margin-bottom:12px;"><label>Nome</label><input id="nu-nome" autocomplete="off" placeholder="Ex: Ana Souza" /></div>
+      <div class="field" style="margin-bottom:12px;"><label>Usuário (para entrar)</label><input id="nu-usuario" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" placeholder="Ex: ana.souza" /></div>
+      <div class="field" style="margin-bottom:12px;"><label>Senha inicial</label><input id="nu-senha" type="text" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" placeholder="Mínimo 8 caracteres" /></div>
+      <div class="field" style="margin-bottom:16px;"><label>Perfil</label><select id="nu-role"><option value="inventariar">Inventariar</option><option value="gerenciar">Gerenciar</option></select></div>
+      <div style="display:flex;gap:10px;"><button class="btn btn-outline" id="btn-cancelar-usuario" style="${btnPeq}">CANCELAR</button><button class="btn btn-primary" id="btn-criar-usuario" style="${btnPeq}">CRIAR</button></div>`);
+  }
+
+  const u = state.usuariosLista.find(x => x.id === alvo);
+  if (!u) return '';
+  const euMesmo = u.id === currentProfile.id;
+  const cab = `
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;"><h3 style="margin:0;font-size:17px;">${esc(u.nome)}</h3>${fechar}</div>
+    <div class="meta" style="margin-bottom:16px;">@${esc(u.usuario)} · <span class="badge ${classeBadgePerfil(u)}">${rotuloPerfil(u.role)}</span>${u.ativo ? '' : ' · desativado'}</div>`;
+  const voltar = `<button class="btn btn-outline" id="btn-acao-voltar" style="${btnPeq}">VOLTAR</button>`;
+
+  if (state._usuarioAcao === 'senha') {
+    return envolver(cab + `
+      <div class="field" style="margin-bottom:16px;"><label>Nova senha</label><input id="ed-senha" type="text" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" placeholder="Mínimo 8 caracteres" /></div>
+      <div style="display:flex;gap:10px;">${voltar}<button class="btn btn-primary" id="btn-salvar-senha" style="${btnPeq}">SALVAR</button></div>`);
+  }
+  if (state._usuarioAcao === 'perfil') {
+    const outro = u.role === 'gerenciar' ? 'inventariar' : 'gerenciar';
+    return envolver(cab + `
+      <div class="field" style="margin-bottom:16px;"><label>Novo perfil</label>
+        <select id="ed-role"><option value="inventariar" ${outro === 'inventariar' ? 'selected' : ''}>Inventariar</option><option value="gerenciar" ${outro === 'gerenciar' ? 'selected' : ''}>Gerenciar</option></select></div>
+      <div style="display:flex;gap:10px;">${voltar}<button class="btn btn-primary" id="btn-salvar-perfil" style="${btnPeq}">SALVAR</button></div>`);
+  }
+  if (state._usuarioAcao === 'ativo') {
+    return envolver(cab + `
+      <div style="font-size:14px;margin-bottom:16px;">${u.ativo
+        ? 'Desativar o acesso deste usuário? Ele será desconectado e não conseguirá mais entrar.'
+        : 'Reativar o acesso deste usuário?'}</div>
+      <div style="display:flex;gap:10px;">${voltar}<button class="btn ${u.ativo ? 'btn-danger' : 'btn-primary'}" id="btn-confirmar-ativo" style="${btnPeq}">${u.ativo ? 'DESATIVAR' : 'REATIVAR'}</button></div>`);
+  }
+  return envolver(cab + `
+    <button class="btn btn-outline" data-usuario-acao="senha" style="${btnPeq}margin-bottom:10px;">🔒 Redefinir senha</button>
+    ${euMesmo ? `<div class="meta" style="text-align:center;">Você não pode mudar o próprio perfil nem desativar o próprio acesso.</div>` : `
+      <button class="btn btn-outline" data-usuario-acao="perfil" style="${btnPeq}margin-bottom:10px;">Mudar perfil</button>
+      <button class="btn ${u.ativo ? 'btn-danger' : 'btn-primary'}" data-usuario-acao="ativo" style="${btnPeq}">${u.ativo ? 'Desativar acesso' : 'Reativar acesso'}</button>`}`);
+}
+
+function bindUsuarios() {
+  if (state.tab !== 'usuarios') return;
+  const fecharPopup = () => { state._usuarioPopup = null; state._usuarioAcao = null; render(); };
+  document.getElementById('fab-novo-usuario')?.addEventListener('click', () => { state._usuarioPopup = 'novo'; state._usuarioAcao = null; render(); });
+  document.querySelectorAll('[data-editar-usuario]').forEach(c => c.onclick = () => { state._usuarioPopup = c.dataset.editarUsuario; state._usuarioAcao = null; render(); });
+  document.getElementById('btn-fechar-popup-usuario')?.addEventListener('click', fecharPopup);
+  document.getElementById('btn-cancelar-usuario')?.addEventListener('click', fecharPopup);
+  document.querySelectorAll('[data-usuario-acao]').forEach(b => b.onclick = () => { state._usuarioAcao = b.dataset.usuarioAcao; render(); });
+  document.getElementById('btn-acao-voltar')?.addEventListener('click', () => { state._usuarioAcao = null; render(); });
+
+  const chamar = async (btn, funcao, args, msgOk) => {
+    const textoOriginal = btn.textContent;
+    btn.disabled = true; btn.textContent = 'AGUARDE...';
+    const { error } = await sb.rpc(funcao, args);
+    if (error) { btn.disabled = false; btn.textContent = textoOriginal; showToast(error.message, true, 4500); return; }
+    showToast(msgOk);
+    await carregarUsuarios();
+    state._usuarioPopup = null; state._usuarioAcao = null;
+    render();
+  };
+
+  document.getElementById('btn-criar-usuario')?.addEventListener('click', (e) => {
+    const nome = document.getElementById('nu-nome').value.trim();
+    const usuario = normalizarUsuario(document.getElementById('nu-usuario').value);
+    const senha = document.getElementById('nu-senha').value;
+    const role = document.getElementById('nu-role').value;
+    if (!nome) { showToast('Informe o nome.', true); return; }
+    if (!/^[a-z0-9._-]{3,30}$/.test(usuario)) { showToast('Usuário: 3 a 30 caracteres, só letras minúsculas, números, ponto, hífen ou sublinhado.', true, 4500); return; }
+    if (senha.length < 8) { showToast('A senha precisa ter pelo menos 8 caracteres.', true); return; }
+    chamar(e.currentTarget, 'admin_criar_usuario', { p_usuario: usuario, p_nome: nome, p_senha: senha, p_role: role }, 'Usuário criado.');
+  });
+  document.getElementById('btn-salvar-senha')?.addEventListener('click', (e) => {
+    const senha = document.getElementById('ed-senha').value;
+    if (senha.length < 8) { showToast('A senha precisa ter pelo menos 8 caracteres.', true); return; }
+    chamar(e.currentTarget, 'admin_redefinir_senha', { p_id: state._usuarioPopup, p_senha: senha }, 'Senha redefinida.');
+  });
+  document.getElementById('btn-salvar-perfil')?.addEventListener('click', (e) => {
+    chamar(e.currentTarget, 'admin_mudar_perfil', { p_id: state._usuarioPopup, p_role: document.getElementById('ed-role').value }, 'Perfil alterado.');
+  });
+  document.getElementById('btn-confirmar-ativo')?.addEventListener('click', (e) => {
+    const u = state.usuariosLista.find(x => x.id === state._usuarioPopup);
+    if (!u) return;
+    chamar(e.currentTarget, 'admin_definir_ativo', { p_id: u.id, p_ativo: !u.ativo }, u.ativo ? 'Acesso desativado.' : 'Acesso reativado.');
+  });
+}
+
 /* ---------------- EVENTOS ---------------- */
 
 function bindGlobal() {
   document.querySelectorAll('[data-tab]').forEach(b => b.onclick = () => {
-    state.tab = b.dataset.tab; state.currentInventoryId = null; state.produtoEncontrado = null; render();
+    state.tab = b.dataset.tab; state.currentInventoryId = null; state.produtoEncontrado = null; state._usuarioPopup = null; render();
+    if (state.tab === 'usuarios') carregarUsuarios().then(() => { if (state.tab === 'usuarios') render(); });
   });
 
   const sair = document.getElementById('btn-sair');
-  if (sair) sair.onclick = async () => { await sb.auth.signOut(); currentProfile = null; render(); };
+  if (sair) sair.onclick = sairDoApp;
 
   document.querySelectorAll('[data-invfilter]').forEach(b => b.onclick = () => { state._invFilter = b.dataset.invfilter; render(); });
   document.querySelectorAll('[data-open-inv]').forEach(b => b.onclick = () => {
@@ -1769,11 +1975,22 @@ function exportFinalCsv(inv) {
 
 (async function start() {
   await ensureMasterLoaded();
-  await ensureAuth();
-  const { data: { session } } = await sb.auth.getSession();
-  if (session) currentProfile = await loadProfile(session.user.id);
-  if (currentProfile) await refreshInventories();
-  assinarTempoReal();
+  try {
+    const { data: { session } } = await withTimeout(sb.auth.getSession(), 12000, 'Servidor demorando para responder.');
+    if (session) {
+      const perfil = await loadProfile(session.user.id);
+      if (perfil && perfil.ativo && perfil.usuario) aplicarPerfil(perfil, true);
+      else await sb.auth.signOut();
+    }
+  } catch (err) { console.error('Falha ao restaurar sessão:', err); }
+  if (currentProfile && !state._precisaDupla) {
+    await refreshInventories();
+    assinarTempoReal();
+  }
+  // Sessão encerrada em outro lugar (ou usuário desativado): volta para o login.
+  sb.auth.onAuthStateChange((evento) => {
+    if (evento === 'SIGNED_OUT' && currentProfile) { currentProfile = null; state._precisaDupla = false; render(); }
+  });
   render();
 })();
 
