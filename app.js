@@ -44,10 +44,15 @@ function normalizarUsuario(u) { return String(u || '').trim().toLowerCase(); }
 function usuarioParaEmail(u) { return `${normalizarUsuario(u)}@${EMAIL_DOMINIO}`; }
 
 async function loadProfile(userId) {
-  const { data } = await withTimeout(
+  const { data, error } = await withTimeout(
     sb.from('profiles').select('*').eq('id', userId).maybeSingle(),
     12000, 'Servidor demorando para responder. Tente novamente.'
   );
+  if (error) {
+    console.error('Erro ao ler perfil', error);
+    throw new Error('Erro ao ler o perfil: ' + (error.message || error.code || 'desconhecido') +
+      (error.code ? ' (' + error.code + ')' : ''));
+  }
   return data;
 }
 
