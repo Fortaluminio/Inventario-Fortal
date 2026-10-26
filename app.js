@@ -790,7 +790,7 @@ function render() {
 }
 
 function bindPerfilSom() {
-  document.querySelectorAll('[data-tema]').forEach(b => b.onclick = () => { TEMA.pref = b.dataset.tema; TEMA.aplicar(); render(); });
+  document.querySelectorAll('.seg-tema button[data-tema]').forEach(b => b.onclick = () => { TEMA.pref = b.dataset.tema; TEMA.aplicar(); render(); });
   const chk = document.getElementById('chk-som');
   if (!chk) return;
   chk.onchange = () => { SOM.ligado = chk.checked; };
@@ -1982,7 +1982,7 @@ async function registrarLancamentoInterno() {
 
 /* ---------------- TEMA (claro / escuro / automático) ---------------- */
 const TEMA = {
-  get pref() { try { return localStorage.getItem('if_tema') || 'auto'; } catch (e) { return 'auto'; } },
+  get pref() { try { const v = localStorage.getItem('if_tema'); return ['claro', 'escuro', 'auto'].includes(v) ? v : 'auto'; } catch (e) { return 'auto'; } },
   set pref(v) { try { localStorage.setItem('if_tema', v); } catch (e) {} },
   efetivo() { return this.pref === 'auto' ? (window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches ? 'escuro' : 'claro') : this.pref; },
   aplicar() { document.documentElement.setAttribute('data-tema', this.efetivo());
