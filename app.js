@@ -219,8 +219,25 @@ async function refreshInventories(opcoes = {}) {
   }));
   _statusCacheVersion++;
   if (opcoes.semTela && state.tab === 'inventariar') return; // não derruba a tela de contagem
+  renderSeguro();
+}
+
+// Atualizações em segundo plano nunca redesenham a tela enquanto a pessoa está digitando
+// (redesenhar fecha o teclado e apaga o que foi digitado). Fica pendente até sair do campo.
+let _renderPendente = false;
+function digitandoAgora() {
+  const el = document.activeElement;
+  return !!el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT');
+}
+function renderSeguro() {
+  if (digitandoAgora()) { _renderPendente = true; return; }
+  _renderPendente = false;
   render();
 }
+document.addEventListener('focusout', () => {
+  if (!_renderPendente) return;
+  setTimeout(() => { if (_renderPendente && !digitandoAgora()) { _renderPendente = false; render(); } }, 500);
+});
 
 function mapEntry(e) {
   return {
@@ -419,7 +436,7 @@ function aplicarMudancaLancamento(payload) {
   // Só redesenha se a pessoa não estiver digitando/contando.
   if (state.tab !== 'inventariar') {
     clearTimeout(_telaTimer);
-    _telaTimer = setTimeout(() => render(), 600);
+    _telaTimer = setTimeout(() => renderSeguro(), 600);
   }
 }
 
