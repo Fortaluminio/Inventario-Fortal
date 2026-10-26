@@ -39,7 +39,9 @@ html, body {
   flex-direction: column;
   max-width: 480px;
   margin: 0 auto;
-  background: var(--fundo);
+  background: transparent;
+  position: relative;
+  z-index: 1;
   padding-bottom: env(safe-area-inset-bottom);
 }
 
@@ -321,3 +323,57 @@ table.report th, table.report td { padding: 8px 6px; text-align: left; border-bo
 table.report th { color: var(--texto-suave); font-weight: 600; }
 
 #qr-reader { border-radius: var(--raio); overflow: hidden; margin-bottom: 12px; }
+
+/* ---------- v2: ícones de linha ---------- */
+.ico { display: inline-block; vertical-align: middle; flex-shrink: 0; }
+.tabbar .ic, .icon-toolbar button .ic { display: flex; align-items: center; justify-content: center; line-height: 0; }
+.tabbar button.active .ico { color: var(--azul-escuro); }
+.icon-toolbar button .ic { color: var(--azul-escuro); }
+.icon-toolbar button .ic-avaria { color: var(--laranja); }
+.empty-state .ic { display: flex; justify-content: center; color: var(--texto-suave); opacity: .7; }
+
+/* ---------- v2: campo com câmera pequena ---------- */
+.campo-com-camera { display: flex; gap: 8px; align-items: stretch; }
+.campo-com-camera input { flex: 1; min-width: 0; }
+.btn-camera {
+  flex: 0 0 52px; border-radius: var(--raio-sm); border: 1.5px solid var(--borda);
+  background: var(--azul-escuro); color: var(--lima);
+  display: flex; align-items: center; justify-content: center; padding: 0;
+}
+.btn-camera:active { transform: scale(.96); }
+
+/* ---------- v2: confirmação central ---------- */
+.confirma-overlay {
+  position: fixed; inset: 0; z-index: 60; pointer-events: none;
+  display: flex; align-items: center; justify-content: center;
+  animation: confIn .16s ease-out;
+}
+.confirma-overlay.saindo { opacity: 0; transition: opacity .2s; }
+.confirma-card {
+  background: var(--azul-escuro); color: #fff; border-radius: 22px;
+  padding: 24px 26px; width: 78%; max-width: 300px; text-align: center;
+  box-shadow: 0 14px 40px rgba(11,37,69,.45);
+}
+.confirma-ic { color: var(--lima); display: flex; justify-content: center; margin-bottom: 8px; }
+.confirma-card.atencao .confirma-ic { color: #FFB347; }
+.confirma-tick { stroke-dasharray: 24; stroke-dashoffset: 24; animation: tick .3s .05s ease-out forwards; }
+.confirma-titulo { font-size: 20px; font-weight: 800; }
+.confirma-l1 { font-size: 15px; font-weight: 700; margin-top: 6px; color: var(--lima); }
+.confirma-card.atencao .confirma-l1 { color: #FFD9A0; }
+.confirma-l2 { font-size: 12.5px; color: #AFC3E0; margin-top: 4px; overflow-wrap: anywhere; }
+@keyframes confIn { from { opacity: 0; transform: scale(.92); } to { opacity: 1; transform: scale(1); } }
+@keyframes tick { to { stroke-dashoffset: 0; } }
+
+/* ---------- v2: Perfil / som ---------- */
+.linha-som { display: flex; align-items: center; gap: 10px; margin: 10px 0; font-size: 14px; color: var(--texto); }
+.linha-som input[type=checkbox] { width: 20px; height: 20px; padding: 0; }
+.linha-som input[type=range] { flex: 1; padding: 0; border: none; }
+
+/* ---------- v2: marca d'água em movimento ---------- */
+.wm-bg { position: fixed; inset: 0; z-index: 0; overflow: hidden; pointer-events: none; }
+.wm-bg img { position: absolute; opacity: .05; }
+.wm-bg .wm1 { width: 420px; left: -90px; top: 8%; animation: wmA 45s ease-in-out infinite alternate; }
+.wm-bg .wm2 { width: 300px; right: -80px; bottom: 6%; animation: wmB 55s ease-in-out infinite alternate; }
+@keyframes wmA { from { transform: translate(0,0) rotate(-8deg); } to { transform: translate(110px,180px) rotate(6deg); } }
+@keyframes wmB { from { transform: translate(0,0) rotate(10deg); } to { transform: translate(-90px,-160px) rotate(-6deg); } }
+@media (prefers-reduced-motion: reduce) { .wm-bg img { animation: none; } .confirma-tick { animation: none; stroke-dashoffset: 0; } .confirma-overlay { animation: none; } }

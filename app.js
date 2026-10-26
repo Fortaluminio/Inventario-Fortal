@@ -189,14 +189,14 @@ async function refreshInventories(opcoes = {}) {
 
   let prods;
   if (completo || !_produtosCache) {
-    prods = ids.length ? await buscarTudoPaginado(() => sb.from('inventory_products').select('*').in('inventory_id', ids)) : [];
+    prods = ids.length ? await buscarTudoPaginado(() => sb.from('inventory_products').select('*').in('inventory_id', ids).order('inventory_id').order('codigo')) : [];
     _produtosCache = prods;
   } else {
     prods = _produtosCache;
   }
   const [entries, corrections] = await Promise.all([
-    ids.length ? buscarTudoPaginado(() => sb.from('count_entries').select('*').in('inventory_id', ids)) : [],
-    ids.length ? buscarTudoPaginado(() => sb.from('corrections').select('*').in('inventory_id', ids)) : [],
+    ids.length ? buscarTudoPaginado(() => sb.from('count_entries').select('*').in('inventory_id', ids).order('created_at').order('id')) : [],
+    ids.length ? buscarTudoPaginado(() => sb.from('corrections').select('*').in('inventory_id', ids).order('created_at').order('id')) : [],
   ]);
 
   inventoriesCache = invs.map(inv => ({
@@ -211,19 +211,25 @@ async function refreshInventories(opcoes = {}) {
       codigo: p.codigo, referencia: p.referencia, descricao: p.descricao,
       unidade: p.unidade, codigoBarras: p.codigo_barras, temFoto: temFotoLocal(p.codigo),
     })),
-    entries: (entries || []).filter(e => e.inventory_id === inv.id).map(e => ({
-      id: e.id, codigo: e.codigo, round: e.round, quantity: +e.quantity,
-      arvore: e.arvore, lado: e.lado,
-      detalheContagem: e.detalhe_contagem || null,
-      qtdAvaria: e.qtd_avaria == null ? null : +e.qtd_avaria,
-      userName: e.user_nome, deviceId: e.device_id, timestamp: e.created_at,
-    })),
+    entries: (entries || []).filter(e => e.inventory_id === inv.id).map(mapEntry),
     corrections: (corrections || []).filter(c => c.inventory_id === inv.id).map(c => ({
       id: c.id, codigo: c.codigo, round: c.round, oldTotal: c.old_total == null ? null : +c.old_total,
       newTotal: +c.new_total, reason: c.reason, userName: c.user_nome, timestamp: c.created_at,
     })),
   }));
+  _statusCacheVersion++;
+  if (opcoes.semTela && state.tab === 'inventariar') return; // não derruba a tela de contagem
   render();
+}
+
+function mapEntry(e) {
+  return {
+    id: e.id, codigo: e.codigo, round: e.round, quantity: +e.quantity,
+    arvore: e.arvore, lado: e.lado,
+    detalheContagem: e.detalhe_contagem || null,
+    qtdAvaria: e.qtd_avaria == null ? null : +e.qtd_avaria,
+    userName: e.user_nome, deviceId: e.device_id, timestamp: e.created_at,
+  };
 }
 
 function temFotoLocal(codigo) {
@@ -231,33 +237,45 @@ function temFotoLocal(codigo) {
   return !!(p && p.temFoto);
 }
 
-async function criarInventarioSupabase(numero, produtos) {
-  console.log('[import] criando registro do inventário', numero, '...');
+async function criarInventarioSupabase(numero, produtosBrutos) {
+  // 1) Um mesmo código repetido no PDF derrubava o lote inteiro. Tira os repetidos e avisa.
+  const vistos = new Set();
+  const produtos = [];
+  let repetidos = 0;
+  for (const p of produtosBrutos) {
+    if (vistos.has(p.codigo)) { repetidos++; continue; }
+    vistos.add(p.codigo);
+    produtos.push(p);
+  }
+  console.log('[import] criando registro do inventário', numero, '| produtos:', produtos.length, '| repetidos ignorados:', repetidos);
+
   const { data: inv, error } = await sb.from('inventories')
     .insert({ numero, created_by: currentProfile.id })
     .select().single();
   if (error) { console.error('[import] erro ao criar inventories:', error); showToast('Erro ao criar inventário: ' + error.message, true, 8000); return false; }
-  console.log('[import] inventário criado, id:', inv.id, '| total de produtos a inserir:', produtos.length);
+
+  // Se algo falhar, apaga o inventário criado: nunca fica um inventário pela metade.
+  const descartar = async () => { try { await sb.from('inventories').delete().eq('id', inv.id); } catch (e) { console.error(e); } };
 
   const rows = produtos.map(p => ({
     inventory_id: inv.id, codigo: p.codigo, referencia: p.referencia,
     descricao: p.descricao, unidade: p.unidade, codigo_barras: p.codigoBarras,
   }));
 
-  const TAMANHO_LOTE = 400;
+  const TAMANHO_LOTE = 300;
+  const totalLotes = Math.ceil(rows.length / TAMANHO_LOTE);
   for (let i = 0; i < rows.length; i += TAMANHO_LOTE) {
     const lote = rows.slice(i, i + TAMANHO_LOTE);
     const numeroLote = Math.floor(i / TAMANHO_LOTE) + 1;
-    const totalLotes = Math.ceil(rows.length / TAMANHO_LOTE);
-    console.log(`[import] enviando lote ${numeroLote}/${totalLotes} (${lote.length} produtos, itens ${i + 1} a ${i + lote.length})...`);
-
     let sucesso = false, ultimoErro = null;
     for (let tentativa = 1; tentativa <= 3; tentativa++) {
       try {
-        const { error: e2, status, statusText } = await sb.from('inventory_products').insert(lote);
+        // upsert que ignora duplicado: repetir o lote depois de uma queda de conexão é seguro.
+        const { error: e2 } = await sb.from('inventory_products')
+          .upsert(lote, { onConflict: 'inventory_id,codigo', ignoreDuplicates: true });
         if (!e2) { sucesso = true; break; }
         ultimoErro = e2;
-        console.error(`[import] erro no lote ${numeroLote}/${totalLotes}, tentativa ${tentativa}/3:`, e2, 'status:', status, statusText);
+        console.error(`[import] erro no lote ${numeroLote}/${totalLotes}, tentativa ${tentativa}/3:`, e2);
       } catch (err) {
         ultimoErro = err;
         console.error(`[import] exceção no lote ${numeroLote}/${totalLotes}, tentativa ${tentativa}/3:`, err);
@@ -268,18 +286,26 @@ async function criarInventarioSupabase(numero, produtos) {
       }
     }
     if (!sucesso) {
-      console.error(`[import] lote ${numeroLote}/${totalLotes} falhou depois de 3 tentativas.`, ultimoErro);
-      showToast(`Falha no lote ${numeroLote} de ${totalLotes} mesmo após 3 tentativas (parou em ${i} de ${rows.length} produtos). Exclua este inventário e tente importar de novo.`, true, 10000);
+      await descartar();
+      showToast(`A importação falhou no lote ${numeroLote} de ${totalLotes} (${(ultimoErro && ultimoErro.message) || 'erro de conexão'}). Nada foi criado — tente importar de novo.`, true, 10000);
+      await refreshInventories();
       return false;
     }
-    console.log(`[import] lote ${numeroLote}/${totalLotes} OK.`);
-    if (rows.length > TAMANHO_LOTE) {
-      showToast(`Importando... ${Math.min(i + TAMANHO_LOTE, rows.length)} de ${rows.length}`, false, 1500);
-    }
+    if (rows.length > TAMANHO_LOTE) showToast(`Importando... ${Math.min(i + TAMANHO_LOTE, rows.length)} de ${rows.length}`, false, 1500);
   }
-  console.log('[import] todos os lotes inseridos com sucesso. Atualizando...');
+
+  // 3) Conferência final: confere no banco quantos itens entraram de verdade.
+  const { count, error: eCount } = await sb.from('inventory_products')
+    .select('*', { count: 'exact', head: true }).eq('inventory_id', inv.id);
+  if (eCount || count !== produtos.length) {
+    console.error('[import] conferência falhou:', count, 'de', produtos.length, eCount);
+    await descartar();
+    showToast(`Conferência falhou: entraram ${count ?? '?'} de ${produtos.length} produtos. O inventário foi descartado — importe de novo.`, true, 10000);
+    await refreshInventories();
+    return false;
+  }
   await refreshInventories();
-  console.log('[import] finalizado.');
+  showToast(`✓ Importação conferida: ${count} de ${produtos.length} produtos${repetidos ? ` (${repetidos} código(s) repetido(s) no PDF ignorado(s))` : ''}`, false, 6000);
   return true;
 }
 
@@ -305,28 +331,44 @@ async function excluirTodosLancamentosRodada(inventoryId, codigo, round) {
   return true;
 }
 
+function novoUuid() {
+  if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
+  const b = crypto.getRandomValues(new Uint8Array(16));
+  b[6] = (b[6] & 0x0f) | 0x40; b[8] = (b[8] & 0x3f) | 0x80;
+  const h = [...b].map(x => x.toString(16).padStart(2, '0')).join('');
+  return `${h.slice(0,8)}-${h.slice(8,12)}-${h.slice(12,16)}-${h.slice(16,20)}-${h.slice(20)}`;
+}
+
 async function registrarLancamentoSupabase(inventoryId, codigo, round, quantity, arvore, lado, detalheContagem, qtdAvaria) {
-  const { data, error } = await sb.from('count_entries').insert({
+  // O número único é criado ANTES de enviar. Se a internet cair e o app tentar de novo,
+  // o banco reconhece o mesmo lançamento (erro 23505) e não grava duas vezes.
+  const row = {
+    id: novoUuid(),
     inventory_id: inventoryId, codigo, round, quantity, arvore: arvore || null, lado: lado || null,
     detalhe_contagem: detalheContagem, qtd_avaria: qtdAvaria,
     user_id: currentProfile.id, user_nome: currentProfile.nome, device_id: deviceId(),
-  }).select().single();
-  if (error) { showToast('Erro ao registrar: ' + error.message, true); return false; }
+  };
+  let erro = null;
+  for (let t = 1; t <= 3; t++) {
+    try {
+      const { error } = await withTimeout(sb.from('count_entries').insert(row), 15000, 'Servidor demorando para responder.');
+      if (!error || error.code === '23505') { erro = null; break; }
+      erro = error;
+      if (error.code) break; // erro de regra do banco (permissão, valor inválido): repetir não adianta
+    } catch (e) { erro = e; }
+    if (t < 3) await new Promise(r => setTimeout(r, 700 * t));
+  }
+  if (erro) {
+    showToast('Não foi possível registrar agora (' + (erro.message || 'sem conexão') + '). Nada foi gravado. Confira a internet e toque em REGISTRAR de novo.', true, 6000);
+    return false;
+  }
 
-  // Atualiza a tela na hora, sem esperar recarregar os milhares de produtos
-  // de novo — a sincronização completa acontece em segundo plano.
+  // Atualiza a tela na hora com o que acabou de gravar (sem baixar tudo de novo).
   const inv = inventoriesCache.find(i => i.id === inventoryId);
-  if (inv) {
-    inv.entries.push({
-      id: data.id, codigo: data.codigo, round: data.round, quantity: +data.quantity,
-      arvore: data.arvore, lado: data.lado,
-      detalheContagem: data.detalhe_contagem || null,
-      qtdAvaria: data.qtd_avaria == null ? null : +data.qtd_avaria,
-      userName: data.user_nome, deviceId: data.device_id, timestamp: data.created_at,
-    });
+  if (inv && !inv.entries.some(e => e.id === row.id)) {
+    inv.entries.push(mapEntry({ ...row, created_at: new Date().toISOString() }));
     _statusCacheVersion++;
   }
-  refreshInventoriesDebounced();
   return true;
 }
 
@@ -355,7 +397,39 @@ async function atualizarEtapaSupabase(inventoryId, patch) {
 let _refreshDebounceTimer = null;
 function refreshInventoriesDebounced(completo = false) {
   clearTimeout(_refreshDebounceTimer);
-  _refreshDebounceTimer = setTimeout(() => { refreshInventories({ completo }); }, 2000);
+  _refreshDebounceTimer = setTimeout(() => { refreshInventories({ completo, semTela: true }); }, 2000);
+}
+
+// Lançamento feito em OUTRO aparelho: entra direto na memória, sem baixar tudo de novo.
+let _telaTimer = null;
+function aplicarMudancaLancamento(payload) {
+  if (payload.eventType === 'INSERT' && payload.new) {
+    const inv = inventoriesCache.find(i => i.id === payload.new.inventory_id);
+    if (!inv) return refreshInventoriesDebounced(false);
+    if (!inv.entries.some(x => x.id === payload.new.id)) inv.entries.push(mapEntry(payload.new));
+  } else if (payload.eventType === 'DELETE' && payload.old && payload.old.id) {
+    for (const inv of inventoriesCache) {
+      const i = inv.entries.findIndex(x => x.id === payload.old.id);
+      if (i >= 0) inv.entries.splice(i, 1);
+    }
+  } else {
+    return refreshInventoriesDebounced(false);
+  }
+  _statusCacheVersion++;
+  // Só redesenha se a pessoa não estiver digitando/contando.
+  if (state.tab !== 'inventariar') {
+    clearTimeout(_telaTimer);
+    _telaTimer = setTimeout(() => render(), 600);
+  }
+}
+
+// Conferência de segurança: ao voltar para o app e a cada 5 min, confere tudo em segundo plano.
+function iniciarSincronizacaoSegura() {
+  if (window._syncSeguraAtiva) return;
+  window._syncSeguraAtiva = true;
+  const sincronizar = () => { if (currentProfile && document.visibilityState === 'visible') refreshInventories({ completo: false, semTela: true }); };
+  document.addEventListener('visibilitychange', sincronizar);
+  setInterval(sincronizar, 5 * 60 * 1000);
 }
 
 let _canalTempoReal = null;
@@ -364,7 +438,7 @@ function assinarTempoReal() {
   _canalTempoReal = sb.channel('inventario-fortal-mudancas')
     .on('postgres_changes', { event: '*', schema: 'public', table: 'inventories' }, () => refreshInventoriesDebounced(true))
     .on('postgres_changes', { event: '*', schema: 'public', table: 'inventory_products' }, () => refreshInventoriesDebounced(true))
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'count_entries' }, () => refreshInventoriesDebounced(false))
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'count_entries' }, aplicarMudancaLancamento)
     .on('postgres_changes', { event: '*', schema: 'public', table: 'corrections' }, () => refreshInventoriesDebounced(false))
     .subscribe();
 }
@@ -650,6 +724,11 @@ function currentInventory() { return inventoriesCache.find(i => i.id === state.c
 
 /* ---------------- RENDER ---------------- */
 
+const ICONES = {"scan-line": "<path d=\"M3 7V5a2 2 0 0 1 2-2h2\"/><path d=\"M17 3h2a2 2 0 0 1 2 2v2\"/><path d=\"M21 17v2a2 2 0 0 1-2 2h-2\"/><path d=\"M7 21H5a2 2 0 0 1-2-2v-2\"/><path d=\"M7 12h10\"/>", "map-pin": "<g fill=\"none\" stroke=\"currentColor\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"2\"><path d=\"M20 10c0 4.993-5.539 10.193-7.399 11.799a1 1 0 0 1-1.202 0C9.539 20.193 4 14.993 4 10a8 8 0 0 1 16 0\"/><circle cx=\"12\" cy=\"10\" r=\"3\"/></g>", "triangle-alert": "<path fill=\"none\" stroke=\"currentColor\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"2\" d=\"m21.73 18l-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3M12 9v4m0 4h.01\"/>", "rotate-cw": "<g fill=\"none\" stroke=\"currentColor\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"2\"><path d=\"M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8\"/><path d=\"M21 3v5h-5\"/></g>", "pencil": "<path fill=\"none\" stroke=\"currentColor\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"2\" d=\"M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497zM15 5l4 4\"/>", "package": "<g fill=\"none\" stroke=\"currentColor\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"2\"><path d=\"M11 21.73a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73zm1 .27V12\"/><path d=\"M3.29 7L12 12l8.71-5M7.5 4.27l9 5.15\"/></g>", "camera": "<g fill=\"none\" stroke=\"currentColor\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"2\"><path d=\"M13.997 4a2 2 0 0 1 1.76 1.05l.486.9A2 2 0 0 0 18.003 7H20a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2h1.997a2 2 0 0 0 1.759-1.048l.489-.904A2 2 0 0 1 10.004 4z\"/><circle cx=\"12\" cy=\"13\" r=\"3\"/></g>", "circle-check": "<g fill=\"none\" stroke=\"currentColor\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"2\"><circle cx=\"12\" cy=\"12\" r=\"10\"/><path d=\"m16 9l-5.5 5.5L8 12\"/></g>", "clipboard-list": "<g fill=\"none\" stroke=\"currentColor\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"2\"><rect width=\"8\" height=\"4\" x=\"8\" y=\"2\" rx=\"1\" ry=\"1\"/><path d=\"M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2m4 7h4m-4 5h4m-8-5h.01M8 16h.01\"/></g>", "chart-column": "<path fill=\"none\" stroke=\"currentColor\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"2\" d=\"M3 3v16a2 2 0 0 0 2 2h16m-3-4V9m-5 8V5M8 17v-3\"/>", "key-round": "<g fill=\"none\" stroke=\"currentColor\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"2\"><path d=\"M2.586 17.414A2 2 0 0 0 2 18.828V21a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h1a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h.172a2 2 0 0 0 1.414-.586l.814-.814a6.5 6.5 0 1 0-4-4z\"/><circle cx=\"16.5\" cy=\"7.5\" r=\".5\" fill=\"currentColor\"/></g>", "user": "<g fill=\"none\" stroke=\"currentColor\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"2\"><path d=\"M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2\"/><circle cx=\"12\" cy=\"7\" r=\"4\"/></g>", "x": "<path fill=\"none\" stroke=\"currentColor\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"2\" d=\"M18 6L6 18M6 6l12 12\"/>", "eye": "<g fill=\"none\" stroke=\"currentColor\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"2\"><path d=\"M2.062 12.348a1 1 0 0 1 0-.696a10.75 10.75 0 0 1 19.876 0a1 1 0 0 1 0 .696a10.75 10.75 0 0 1-19.876 0\"/><circle cx=\"12\" cy=\"12\" r=\"3\"/></g>"};
+function ICON(nome, tam = 24, extra = '') {
+  return `<svg class="ico" viewBox="0 0 24 24" width="${tam}" height="${tam}" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" ${extra}>${ICONES[nome] || ''}</svg>`;
+}
+
 function brandIcon() {
   return `<img src="assets/brand/icone-f-branco-transp.png" class="brand-ic" />`;
 }
@@ -671,6 +750,15 @@ function render() {
   app.innerHTML = body;
   bindGlobal();
   bindUsuarios();
+  bindPerfilSom();
+}
+
+function bindPerfilSom() {
+  const chk = document.getElementById('chk-som');
+  if (!chk) return;
+  chk.onchange = () => { SOM.ligado = chk.checked; };
+  document.getElementById('rng-vol').oninput = e => { SOM.volume = parseFloat(e.target.value); };
+  document.getElementById('btn-testar-som').onclick = () => { destravarSom(); tocarSom('ok'); setTimeout(() => tocarSom('atencao'), 700); setTimeout(() => tocarSom('erro'), 1700); };
 }
 
 /* ---- LOGIN ---- */
@@ -767,10 +855,10 @@ function bindDupla() {
 /* ---- TABBAR ---- */
 function tabbar() {
   const tabs = [
-    { id: 'inventarios', ic: '📋', label: 'Inventários' },
-    { id: 'inventariar', ic: '📷', label: 'Inventariar' },
-    ...(currentProfile.role === 'gerenciar' ? [{ id: 'relatorios', ic: '📊', label: 'Relatórios' }, { id: 'usuarios', ic: '🔑', label: 'Usuários' }] : []),
-    { id: 'perfil', ic: '👤', label: 'Perfil' },
+    { id: 'inventarios', ic: ICON('clipboard-list', 24), label: 'Inventários' },
+    { id: 'inventariar', ic: ICON('scan-line', 24), label: 'Inventariar' },
+    ...(currentProfile.role === 'gerenciar' ? [{ id: 'relatorios', ic: ICON('chart-column', 24), label: 'Relatórios' }, { id: 'usuarios', ic: ICON('key-round', 24), label: 'Usuários' }] : []),
+    { id: 'perfil', ic: ICON('user', 24), label: 'Perfil' },
   ];
   return `<div class="tabbar">${tabs.map(t => `
     <button data-tab="${t.id}" class="${state.tab === t.id ? 'active' : ''}">
@@ -1080,7 +1168,7 @@ function viewInventariar() {
     <div class="topbar"><div class="titles">${brandIcon()}<h1>Inventariar</h1></div></div>
     <div class="content">
       <p class="meta" style="margin-bottom:10px;">Selecione o inventário:</p>
-      ${inventarios.length === 0 ? emptyState('📦','Nenhum inventário em andamento') :
+      ${inventarios.length === 0 ? emptyState(ICON('package', 44),'Nenhum inventário em andamento') :
         inventarios.map(inv => `<div class="card" data-select-count-inv="${inv.id}"><h3>Inventário ${inv.numero}</h3><div class="meta">${inv.products.length} produtos</div></div>`).join('')}
     </div>
     ${tabbar()}`;
@@ -1101,19 +1189,23 @@ function viewInventariar() {
   <div class="content">
     ${!p ? `
       <div class="icon-toolbar" style="grid-template-columns:1fr;">
-        <button data-abrir-popup="contagem"><span class="ic">🔄</span><span>${state.currentRound}ª contagem</span></button>
+        <button data-abrir-popup="contagem"><span class="ic">${ICON('rotate-cw', 26)}</span><span>${state.currentRound}ª contagem</span></button>
       </div>
-      <div class="scan-box" id="btn-abrir-camera"><div class="camera-ic">📷</div><b>TOCAR PARA ESCANEAR</b><p>ou digite o código abaixo</p></div>
+      <div class="field"><label>CÓDIGO OU CÓDIGO DE BARRAS</label>
+        <div class="campo-com-camera">
+          <input id="input-codigo" type="text" inputmode="numeric" pattern="[0-9]*" autocomplete="off" autocorrect="off" spellcheck="false" placeholder="Digite o código ou toque na câmera" autofocus />
+          <button type="button" id="btn-abrir-camera" class="btn-camera" aria-label="Escanear com a câmera" title="Escanear com a câmera">${ICON('camera', 24)}</button>
+        </div>
+      </div>
       <div id="qr-reader" style="display:none;"></div>
-      <div class="field"><label>CÓDIGO OU CÓDIGO DE BARRAS</label><input id="input-codigo" type="text" inputmode="numeric" pattern="[0-9]*" autocomplete="off" autocorrect="off" spellcheck="false" placeholder="Ex: 3 ou 200000000003" autofocus /></div>
       <button class="btn btn-primary" id="btn-buscar-produto">BUSCAR</button>
       ${popupInventariar(inv, rodadaHabilitada)}
     ` : `
       <div style="padding-bottom:76px;">
         <div class="icon-toolbar">
-          <button data-abrir-popup="local"><span class="ic">📌</span><span>${['Pátio','Almoxarifado','Vitrine'].includes(state.arvore) ? state.arvore : (state.arvore ? `Árv.${state.arvore}${state.lado ? '/' + state.lado : ''}` : 'Local')}</span></button>
-          <button data-abrir-popup="avaria"><span class="ic">⚠️</span><span>Avaria</span></button>
-          <button data-abrir-popup="contagem"><span class="ic">🔄</span><span>${state.currentRound}ª contagem</span></button>
+          <button data-abrir-popup="local"><span class="ic">${ICON('map-pin', 26)}</span><span>${['Pátio','Almoxarifado','Vitrine'].includes(state.arvore) ? state.arvore : (state.arvore ? `Árv.${state.arvore}${state.lado ? '/' + state.lado : ''}` : 'Local')}</span></button>
+          <button data-abrir-popup="avaria"><span class="ic ic-avaria">${ICON('triangle-alert', 26)}</span><span>Avaria</span></button>
+          <button data-abrir-popup="contagem"><span class="ic">${ICON('rotate-cw', 26)}</span><span>${state.currentRound}ª contagem</span></button>
         </div>
         <div class="produto-encontrado-wrap">
           <div class="validado-badge"><span class="check">✓</span><span class="txt">Produto encontrado — confira antes de registrar</span></div>
@@ -1126,8 +1218,8 @@ function viewInventariar() {
           </div>
         </div>
         <div class="icon-toolbar" style="grid-template-columns:1fr 1fr;">
-          <button data-qtdmodo="simples" class="${state.qtdModo==='simples'?'active':''}"><span class="ic">✏️</span><span>SIMPLES</span></button>
-          <button data-qtdmodo="volumes" class="${state.qtdModo==='volumes'?'active':''}"><span class="ic">📦</span><span>VOLUMES</span></button>
+          <button data-qtdmodo="simples" class="${state.qtdModo==='simples'?'active':''}"><span class="ic">${ICON('pencil', 24)}</span><span>SIMPLES</span></button>
+          <button data-qtdmodo="volumes" class="${state.qtdModo==='volumes'?'active':''}"><span class="ic">${ICON('package', 24)}</span><span>VOLUMES</span></button>
         </div>
         ${state.qtdModo === 'simples' ? `
           <div class="qtd-control">
@@ -1135,7 +1227,7 @@ function viewInventariar() {
           </div>
         ` : `
           <div class="loc-resumo" style="margin-bottom:12px;">
-            <span>📦 Total por volumes: <b>${formatNumeroBR(calcularTotalVolumes())}</b></span>
+            <span style="display:inline-flex;align-items:center;gap:6px;">${ICON('package', 18)} Total por volumes: <b>${formatNumeroBR(calcularTotalVolumes())}</b></span>
             <button data-abrir-popup="volumes">${calcularTotalVolumes() > 0 ? 'ALTERAR' : '+ DEFINIR'}</button>
           </div>
         `}
@@ -1248,10 +1340,16 @@ function viewPerfil() {
   <div class="topbar"><div class="titles">${brandIcon()}<h1>Perfil</h1></div></div>
   <div class="content">
     <div class="card"><h3>${esc(currentProfile.nome)}</h3><div class="meta">Acesso: @${esc(currentProfile.usuario)} · Perfil: ${currentProfile.role === 'gerenciar' ? 'Gerenciar' : 'Inventariar'}</div></div>
+    <div class="card" id="card-som">
+      <h3 style="display:flex;align-items:center;gap:8px;">Som de confirmação</h3>
+      <label class="linha-som"><input type="checkbox" id="chk-som" ${SOM.ligado ? 'checked' : ''} /> <span>Tocar som ao lançar</span></label>
+      <div class="linha-som"><span>Volume</span><input type="range" id="rng-vol" min="0" max="1" step="0.05" value="${SOM.volume}" /></div>
+      <button class="btn btn-outline btn-sm" id="btn-testar-som" type="button">TESTAR SOM</button>
+    </div>
     <button class="btn btn-outline" id="btn-sair" style="margin-bottom:18px;">SAIR</button>
     ${currentProfile.role === 'inventariar' ? `
       <div class="meta" style="font-weight:600;margin-bottom:8px;">Produtos que eu contei (${minhasEntradas.length})</div>
-      ${minhasEntradas.length === 0 ? emptyState('📦','Você ainda não registrou nenhuma contagem') : `
+      ${minhasEntradas.length === 0 ? emptyState(ICON('package', 44),'Você ainda não registrou nenhuma contagem') : `
         <div class="lista-scroll">
           ${minhasEntradas.map(e => {
             const p = e.inv.products.find(p => p.codigo === e.codigo);
@@ -1755,6 +1853,15 @@ function buscarProduto(valor) {
 }
 
 async function registrarLancamento() {
+  if (state._registrando) return; // trava contra toque duplo
+  state._registrando = true;
+  const btn = document.getElementById('btn-registrar');
+  if (btn) btn.disabled = true;
+  try { await registrarLancamentoInterno(); }
+  finally { state._registrando = false; const b2 = document.getElementById('btn-registrar'); if (b2) b2.disabled = false; }
+}
+
+async function registrarLancamentoInterno() {
   const inv = currentInventory();
   const p = state.produtoEncontrado;
   if (!inv || !p) return;
@@ -1788,25 +1895,98 @@ async function registrarLancamento() {
   saveLastLocation(arvore, lado);
   saveLastQtyConfig(state.qtdModo);
 
-  let alertaDivergencia = null;
-  if (state.currentRound === 3) {
-    const s = productStatus(currentInventory(), p.codigo);
-    if (s.status === 'DIVERGÊNCIA CRÍTICA') {
-      alertaDivergencia = `✓ Lançamento registrado. ⚠ Mas esta contagem ainda não bate com nenhuma das anteriores — avise o gerente.`;
+  // Decide o tipo do aviso: normal (✓) ou atenção (⚠).
+  let aviso = { tipo: 'ok', linha2: '' };
+  try {
+    const invAtual = currentInventory();
+    if (state.currentRound === 3) {
+      const s = productStatus(invAtual, p.codigo);
+      if (s.status === 'DIVERGÊNCIA CRÍTICA') aviso = { tipo: 'atencao', titulo: 'Lançado, mas não bate', linha2: 'A 3ª contagem não bate com nenhuma das anteriores. Avise o gerente.' };
+    } else if (state.currentRound === 2) {
+      const t1 = effectiveRoundTotal(invAtual, p.codigo, 1), t2 = effectiveRoundTotal(invAtual, p.codigo, 2);
+      if (roundHasData(invAtual, p.codigo, 1) && t1 !== t2) {
+        aviso = { tipo: 'atencao', titulo: 'Lançado, mas difere da 1ª', linha2: `1ª contagem: ${formatNumeroBR(t1)} · 2ª até agora: ${formatNumeroBR(t2)}` };
+      }
     }
-  }
+  } catch (e) { console.error(e); }
 
   state.produtoEncontrado = null; state.qtd = 0; state.arvore = ''; state.lado = ''; state._localExpandida = false;
   state.qtdAvaria = '';
   state.volumeLinhas = state.qtdModo === 'volumes' ? [linhaVazia()] : [];
   state._volumesExpandida = true;
   render();
-  if (alertaDivergencia) {
-    showToast(alertaDivergencia, true, 6500);
-  } else {
-    showToast(`Lançamento registrado: ${formatNumeroBR(quantidade)}${state.qtdModo === 'volumes' ? ' (calculado)' : ''}${qtdAvaria ? ` (${formatNumeroBR(qtdAvaria)} avariada)` : ''}`);
-  }
+  mostrarConfirmacao({
+    tipo: aviso.tipo,
+    titulo: aviso.titulo || 'Lançado!',
+    linha1: `${state.currentRound}ª contagem · ${formatNumeroBR(quantidade)}${state.qtdModo === 'volumes' ? ' (calculado)' : ''}`,
+    linha2: aviso.linha2 || `${p.referencia} · ${p.descricao}${qtdAvaria ? ` · ${formatNumeroBR(qtdAvaria)} avariada` : ''}`,
+  });
   setTimeout(() => document.getElementById('input-codigo')?.focus(), 50);
+}
+
+
+/* ---------------- SOM E CONFIRMAÇÃO ---------------- */
+
+const SOM = {
+  get ligado() { try { return localStorage.getItem('if_som') !== '0'; } catch (e) { return true; } },
+  set ligado(v) { try { localStorage.setItem('if_som', v ? '1' : '0'); } catch (e) {} },
+  get volume() { try { const v = parseFloat(localStorage.getItem('if_vol')); return isNaN(v) ? 0.6 : Math.min(1, Math.max(0, v)); } catch (e) { return 0.6; } },
+  set volume(v) { try { localStorage.setItem('if_vol', String(v)); } catch (e) {} },
+  ctx: null,
+};
+
+// O iPhone só libera o som depois de um toque do usuário: "destrava" no primeiro toque na tela.
+function destravarSom() {
+  try {
+    if (!SOM.ctx) SOM.ctx = new (window.AudioContext || window.webkitAudioContext)();
+    if (SOM.ctx.state === 'suspended') SOM.ctx.resume();
+  } catch (e) {}
+}
+['touchstart', 'touchend', 'click', 'keydown'].forEach(ev => document.addEventListener(ev, destravarSom, { passive: true }));
+
+function tocarTom(freq, inicio, dur, tipo = 'sine', ganho = 1) {
+  const ctx = SOM.ctx; if (!ctx) return;
+  const t0 = ctx.currentTime + inicio;
+  const osc = ctx.createOscillator(), g = ctx.createGain();
+  osc.type = tipo; osc.frequency.setValueAtTime(freq, t0);
+  const pico = 0.5 * SOM.volume * ganho;
+  g.gain.setValueAtTime(0.0001, t0);
+  g.gain.exponentialRampToValueAtTime(Math.max(pico, 0.0002), t0 + 0.012);
+  g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+  osc.connect(g); g.connect(ctx.destination);
+  osc.start(t0); osc.stop(t0 + dur + 0.02);
+}
+
+function tocarSom(tipo) {
+  if (!SOM.ligado || SOM.volume <= 0) return;
+  destravarSom();
+  try {
+    if (tipo === 'ok') { tocarTom(1568, 0, 0.16); tocarTom(2093, 0.07, 0.18, 'sine', 0.8); }          // "tin" agudo e curto
+    else if (tipo === 'atencao') { tocarTom(880, 0, 0.18, 'triangle'); tocarTom(622, 0.2, 0.26, 'triangle'); } // dois tons descendentes
+    else if (tipo === 'erro') { tocarTom(196, 0, 0.35, 'sawtooth', 0.7); }                              // tom grave
+  } catch (e) { console.error(e); }
+}
+
+// Pop-up central: só avisa e some sozinho. Não bloqueia toques (já dá para ler o próximo produto).
+function mostrarConfirmacao({ tipo, titulo, linha1, linha2 }) {
+  document.querySelectorAll('.confirma-overlay').forEach(el => el.remove());
+  const atencao = tipo === 'atencao';
+  const el = document.createElement('div');
+  el.className = 'confirma-overlay';
+  el.setAttribute('role', 'status');
+  el.setAttribute('aria-live', 'polite');
+  el.innerHTML = `
+    <div class="confirma-card ${atencao ? 'atencao' : ''}">
+      <div class="confirma-ic">${atencao ? ICON('triangle-alert', 52) : '<svg viewBox="0 0 24 24" width="56" height="56" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path class="confirma-tick" d="M5 12.5l4.5 4.5L19 7.5"/></svg>'}</div>
+      <div class="confirma-titulo">${esc(titulo)}</div>
+      <div class="confirma-l1">${esc(linha1 || '')}</div>
+      <div class="confirma-l2">${esc(linha2 || '')}</div>
+    </div>`;
+  document.body.appendChild(el);
+  tocarSom(atencao ? 'atencao' : 'ok');
+  const dur = atencao ? 2400 : 1100;
+  setTimeout(() => el.classList.add('saindo'), dur);
+  setTimeout(() => el.remove(), dur + 220);
 }
 
 function showToast(msg, erro, duracaoMs) {
@@ -1814,6 +1994,7 @@ function showToast(msg, erro, duracaoMs) {
   el.className = 'toast' + (erro ? ' erro' : '');
   el.textContent = msg;
   document.body.appendChild(el);
+  if (erro) tocarSom('erro');
   setTimeout(() => el.remove(), duracaoMs || 2400);
 }
 
@@ -1978,7 +2159,16 @@ function exportFinalCsv(inv) {
 
 /* ---------------- INICIALIZAÇÃO ---------------- */
 
+function criarMarcaDagua() {
+  if (document.getElementById('wm-bg')) return;
+  const wm = document.createElement('div');
+  wm.id = 'wm-bg'; wm.className = 'wm-bg'; wm.setAttribute('aria-hidden', 'true');
+  wm.innerHTML = '<img src="assets/brand/marca-dagua-f-azul.png" class="wm1" alt=""><img src="assets/brand/marca-dagua-f-azul.png" class="wm2" alt="">';
+  document.body.insertBefore(wm, document.body.firstChild);
+}
+
 (async function start() {
+  criarMarcaDagua();
   await ensureMasterLoaded();
   try {
     const { data: { session } } = await withTimeout(sb.auth.getSession(), 12000, 'Servidor demorando para responder.');
@@ -1991,6 +2181,7 @@ function exportFinalCsv(inv) {
   if (currentProfile && !state._precisaDupla) {
     await refreshInventories();
     assinarTempoReal();
+    iniciarSincronizacaoSegura();
   }
   // Sessão encerrada em outro lugar (ou usuário desativado): volta para o login.
   sb.auth.onAuthStateChange((evento) => {
