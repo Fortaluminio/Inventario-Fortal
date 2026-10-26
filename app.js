@@ -655,11 +655,29 @@ function parseWinthorReport(texto) {
   // referência - descrição, seguido de UN.
   const padraoAntigo = /(\d+)\s+([A-Za-zÀ-ÿ0-9./"'\-]+)\s*-\s*(.+?)\s+UN\b/;
 
+  // Formato do relatório 1147 "simples": Módulo Rua Número Apto Código Descrição Embalagem Un.
+  // A descrição pode NÃO ter o " - " (ex.: "ADESIVO FIXA ESPELHO 400GR"). Antes essas linhas eram
+  // descartadas em silêncio — por isso só entravam uma parte dos produtos.
+  const padraoLinhaRelatorio = /^\s*\d+\s+\d+\s+\d+\s+\d+\s+(\d+)\s+(.+)\s+[A-Z]{1,3}(?:\s+[\d.,]+)*\s*$/;
+  const padraoInicioLinha = /^\s*\d+\s+\d+\s+\d+\s+\d+\s+\d+\s+\S/;
+  let candidatas = 0;
+  const ignoradas = [];
+
   for (const linha of linhas) {
     let codigo = null, textoProduto = null;
+    const ehCandidata = padraoInicioLinha.test(linha);
+    if (ehCandidata) candidatas++;
 
-    const m1 = linha.match(padraoColunas);
-    if (m1) {
+    const m0 = linha.match(padraoLinhaRelatorio);
+    if (m0) {
+      codigo = m0[1];
+      // tira a embalagem que vem no fim (UND, 1UND, UN...), colada ou não na descrição
+      textoProduto = m0[2].trim().replace(/(\s+|(?<=[A-Za-zÀ-ÿ)]))\d*(UND?|CX|PCT?|KG|MT|PAR|JG|KIT|RL|BR)$/i, '').trim();
+    }
+    const m1 = codigo ? null : linha.match(padraoColunas);
+    if (codigo) {
+      // já reconhecida pelo formato do relatório 1147
+    } else if (m1) {
       codigo = m1[1];
       textoProduto = m1[2].trim();
     } else {
@@ -669,6 +687,7 @@ function parseWinthorReport(texto) {
         textoProduto = `${m2[2].trim()} - ${m2[3].trim()}`;
       }
     }
+    if (!codigo && ehCandidata) ignoradas.push(linha.trim());
     if (!codigo || encontrados.has(codigo)) continue;
 
     const masterProd = porCodigo.get(codigo);
@@ -688,7 +707,7 @@ function parseWinthorReport(texto) {
       });
     }
   }
-  return { numeroInventario, produtos: Array.from(encontrados.values()) };
+  return { numeroInventario, produtos: Array.from(encontrados.values()), candidatas, ignoradas };
 }
 
 /* ---------------- ESTADO DA UI ---------------- */
@@ -754,6 +773,7 @@ function render() {
 }
 
 function bindPerfilSom() {
+  document.querySelectorAll('[data-tema]').forEach(b => b.onclick = () => { TEMA.pref = b.dataset.tema; TEMA.aplicar(); render(); });
   const chk = document.getElementById('chk-som');
   if (!chk) return;
   chk.onchange = () => { SOM.ligado = chk.checked; };
@@ -856,7 +876,7 @@ function bindDupla() {
 function tabbar() {
   const tabs = [
     { id: 'inventarios', ic: ICON('clipboard-list', 24), label: 'Inventários' },
-    { id: 'inventariar', ic: ICON('scan-line', 24), label: 'Inventariar' },
+    { id: 'inventariar', ic: ICON('scan-line', 24), label: 'Contagem' },
     ...(currentProfile.role === 'gerenciar' ? [{ id: 'relatorios', ic: ICON('chart-column', 24), label: 'Relatórios' }, { id: 'usuarios', ic: ICON('key-round', 24), label: 'Usuários' }] : []),
     { id: 'perfil', ic: ICON('user', 24), label: 'Perfil' },
   ];
@@ -880,7 +900,7 @@ function viewInventarios() {
       <button data-invfilter="andamento" class="${filterTab==='andamento'?'active':''}">EM ANDAMENTO</button>
       <button data-invfilter="finalizados" class="${filterTab==='finalizados'?'active':''}">FINALIZADOS</button>
     </div>
-    ${showList.length === 0 ? emptyState('📦', 'Nenhum inventário aqui ainda') : showList.map(cardInventario).join('')}
+    ${showList.length === 0 ? emptyState(ICON('package', 44), 'Nenhum inventário aqui ainda') : showList.map(cardInventario).join('')}
   </div>
   ${currentProfile.role === 'gerenciar' ? `<button class="fab" id="fab-novo">+</button>` : ''}
   ${modalNovoInventario()}
@@ -918,7 +938,12 @@ function modalNovoInventario() {
       ${preview ? `
         <div class="card">
           <h3>Inventário nº ${preview.numeroInventario || '(não identificado)'}</h3>
-          <div class="meta">Produtos identificados: ${preview.produtos.length}</div>
+          <div class="meta">Produtos identificados: ${preview.produtos.length}${preview.candidatas ? ` · linhas de produto no PDF: ${preview.candidatas}` : ''}</div>
+          ${preview.ignoradas && preview.ignoradas.length ? `
+            <div class="meta" style="color:var(--vermelho);margin-top:6px;font-weight:600;">
+              ⚠ ${preview.ignoradas.length} linha(s) do PDF NÃO foram reconhecidas e ficariam de fora. Não confirme — avise o TI.
+              <div style="font-weight:400;font-size:11px;margin-top:4px;">${preview.ignoradas.slice(0, 5).map(esc).join('<br>')}</div>
+            </div>` : ''}
           ${preview.produtos.some(p => p.foraDaBase) ? `
             <div class="meta" style="color:var(--laranja);margin-top:6px;">
               ⚠ ${preview.produtos.filter(p => p.foraDaBase).length} produto(s) não estão na base mestre do app —
@@ -1059,7 +1084,7 @@ function viewGerenciarInventario(inv) {
       porUsuario[e.userName].produtos.add(e.codigo);
     });
     const linhas = Object.entries(porUsuario).sort((a, b) => b[1].lancamentos - a[1].lancamentos);
-    body = linhas.length === 0 ? emptyState('👥','Nenhum lançamento ainda') : `
+    body = linhas.length === 0 ? emptyState(ICON('user', 44),'Nenhum lançamento ainda') : `
       <div class="meta" style="margin-bottom:10px;">${totalLancamentos} lançamentos no total, de ${linhas.length} pessoa(s)</div>
       ${linhas.map(([nome, d]) => {
         const pctColab = totalLancamentos ? Math.round((d.lancamentos / totalLancamentos) * 100) : 0;
@@ -1201,40 +1226,37 @@ function viewInventariar() {
       <button class="btn btn-primary" id="btn-buscar-produto">BUSCAR</button>
       ${popupInventariar(inv, rodadaHabilitada)}
     ` : `
-      <div style="padding-bottom:76px;">
-        <div class="icon-toolbar">
-          <button data-abrir-popup="local"><span class="ic">${ICON('map-pin', 26)}</span><span>${['Pátio','Almoxarifado','Vitrine'].includes(state.arvore) ? state.arvore : (state.arvore ? `Árv.${state.arvore}${state.lado ? '/' + state.lado : ''}` : 'Local')}</span></button>
-          <button data-abrir-popup="avaria"><span class="ic ic-avaria">${ICON('triangle-alert', 26)}</span><span>Avaria</span></button>
-          <button data-abrir-popup="contagem"><span class="ic">${ICON('rotate-cw', 26)}</span><span>${state.currentRound}ª contagem</span></button>
+      <div class="lanc">
+        <div class="lanc-info">
+          <span class="cod-pill">CÓD. ${p.codigo}</span>
+          <div class="lanc-txt"><div class="lanc-ref">${p.referencia}</div><div class="lanc-desc">${p.descricao}</div></div>
         </div>
-        <div class="produto-encontrado-wrap">
-          <div class="validado-badge"><span class="check">✓</span><span class="txt">Produto encontrado — confira antes de registrar</span></div>
-          <div class="produto-encontrado" style="padding:0 8px 14px;">
-            ${p.temFoto ? `<img src="assets/products/${p.codigo}.png" style="width:165px;height:165px;" />` : `<div class="no-photo" style="width:165px;height:165px;">SEM FOTO</div>`}
-            <div style="display:flex;align-items:baseline;justify-content:center;gap:8px;">
-              <span class="cod-pill">CÓD. ${p.codigo}</span><span style="font-size:19px;color:var(--azul-escuro);font-weight:800;">${p.referencia}</span>
-            </div>
-            <h3 style="margin-top:6px;">${p.descricao}</h3>
-          </div>
+        <div class="lanc-foto">
+          ${p.temFoto ? `<img src="assets/products/${p.codigo}.png" alt="${esc(p.referencia)}" />` : `<div class="no-photo">SEM FOTO</div>`}
+          <button type="button" class="lanc-cont" data-abrir-popup="contagem" aria-label="${state.currentRound}ª contagem — toque para trocar">${state.currentRound}</button>
         </div>
         <div class="icon-toolbar" style="grid-template-columns:1fr 1fr;">
-          <button data-qtdmodo="simples" class="${state.qtdModo==='simples'?'active':''}"><span class="ic">${ICON('pencil', 24)}</span><span>SIMPLES</span></button>
-          <button data-qtdmodo="volumes" class="${state.qtdModo==='volumes'?'active':''}"><span class="ic">${ICON('package', 24)}</span><span>VOLUMES</span></button>
+          <button data-qtdmodo="simples" class="${state.qtdModo==='simples'?'active':''}"><span class="ic">${ICON('pencil', 22)}</span><span>SIMPLES</span></button>
+          <button data-qtdmodo="volumes" class="${state.qtdModo==='volumes'?'active':''}"><span class="ic">${ICON('package', 22)}</span><span>VOLUMES</span></button>
         </div>
         ${state.qtdModo === 'simples' ? `
           <div class="qtd-control">
             <button id="qtd-menos">−</button><input id="qtd-input" type="number" inputmode="numeric" pattern="[0-9]*" value="${state.qtd}" /><button id="qtd-mais">+</button>
           </div>
         ` : `
-          <div class="loc-resumo" style="margin-bottom:12px;">
+          <div class="loc-resumo" style="margin-bottom:0;">
             <span style="display:inline-flex;align-items:center;gap:6px;">${ICON('package', 18)} Total por volumes: <b>${formatNumeroBR(calcularTotalVolumes())}</b></span>
             <button data-abrir-popup="volumes">${calcularTotalVolumes() > 0 ? 'ALTERAR' : '+ DEFINIR'}</button>
           </div>
         `}
+        <div class="lanc-obs">
+          <button data-abrir-popup="local"><span class="ic">${ICON('map-pin', 24)}</span><span class="tx"><small>Local</small><b>${['Pátio','Almoxarifado','Vitrine'].includes(state.arvore) ? state.arvore : (state.arvore ? `Árv. ${state.arvore}${state.lado ? ' / ' + state.lado : ''}` : 'Definir')}</b></span></button>
+          <button data-abrir-popup="avaria"><span class="ic ic-avaria">${ICON('triangle-alert', 24)}</span><span class="tx"><small>Avaria</small><b>${state.qtdAvaria ? formatNumeroBR(parseFloat(String(state.qtdAvaria).replace(',', '.')) || 0) : 'Avaria'}</b></span></button>
+        </div>
       </div>
       <div class="registrar-fixo" style="display:flex;gap:10px;">
-        <button class="btn btn-lima" id="btn-registrar" style="flex:2;">REGISTRAR</button>
-        <button class="btn btn-outline" id="btn-cancelar-produto" style="flex:1;">CANCELAR</button>
+        <button class="btn btn-lima" id="btn-registrar" style="flex:3;">REGISTRAR</button>
+        <button class="btn btn-outline" id="btn-cancelar-produto" style="flex:1.2;font-size:13px;">CANCELAR</button>
       </div>
       ${popupInventariar(inv, rodadaHabilitada)}
     `}
@@ -1268,6 +1290,15 @@ function popupInventariar(inv, rodadaHabilitada) {
     titulo = 'Avaria';
     conteudo = `
       <div class="field"><label>Quantidade avariada</label><input id="input-avaria" type="text" inputmode="decimal" placeholder="Ex: 5 — deixe em branco se não houver" value="${state.qtdAvaria}" /></div>
+      <div class="aviso-avaria">
+        <b>Como funciona</b>
+        <ul>
+          <li>A avaria já está <b>dentro</b> da quantidade que você contou. Não some por fora: se contou 20 e 5 estão avariados, registre 20 e avaria 5.</li>
+          <li>Não pode ser maior que o total do lançamento.</li>
+          <li>Vale só para este lançamento. No relatório, a coluna Avaria soma as avarias de todos os lançamentos do produto.</li>
+          <li>Não altera a quantidade contada nem a comparação entre as contagens.</li>
+        </ul>
+      </div>
       <button class="btn btn-lima" id="btn-confirmar-popup">CONFIRMAR</button>`;
   } else if (state._popupAberto === 'contagem') {
     titulo = 'Qual contagem?';
@@ -1297,7 +1328,7 @@ function popupInventariar(inv, rodadaHabilitada) {
       <button class="btn btn-outline btn-sm" id="btn-add-linha" style="width:100%;margin-bottom:10px;">+ ADICIONAR LINHA</button>
       <div style="text-align:center;background:var(--azul-claro);border-radius:10px;padding:10px;margin-bottom:12px;">
         <div style="font-size:11px;color:var(--texto-suave);">TOTAL CALCULADO</div>
-        <div style="font-size:24px;font-weight:800;color:var(--azul-escuro);">${formatNumeroBR(calcularTotalVolumes())}</div>
+        <div style="font-size:24px;font-weight:800;color:var(--texto);">${formatNumeroBR(calcularTotalVolumes())}</div>
       </div>
       <button class="btn btn-lima" id="btn-confirmar-volumes">CONFIRMAR</button>`;
   }
@@ -1318,7 +1349,7 @@ function viewRelatorios() {
   return `
   <div class="topbar"><div class="titles">${brandIcon()}<h1>Relatórios</h1></div></div>
   <div class="content">
-    ${inventoriesCache.length === 0 ? emptyState('📊','Nenhum inventário ainda') : inventoriesCache.map(inv => {
+    ${inventoriesCache.length === 0 ? emptyState(ICON('chart-column', 44),'Nenhum inventário ainda') : inventoriesCache.map(inv => {
       const div = divergentProducts(inv);
       return `<div class="card"><h3>Inventário ${inv.numero}</h3><div class="meta">${inv.entries.length} lançamentos · ${div.length} divergência(s)</div>
         <button class="btn btn-outline btn-sm" style="margin-top:10px;" data-export-final="${inv.id}">EXPORTAR EXCEL FINAL (CSV)</button></div>`;
@@ -1340,6 +1371,12 @@ function viewPerfil() {
   <div class="topbar"><div class="titles">${brandIcon()}<h1>Perfil</h1></div></div>
   <div class="content">
     <div class="card"><h3>${esc(currentProfile.nome)}</h3><div class="meta">Acesso: @${esc(currentProfile.usuario)} · Perfil: ${currentProfile.role === 'gerenciar' ? 'Gerenciar' : 'Inventariar'}</div></div>
+    <div class="card" id="card-tema">
+      <h3 style="margin-bottom:12px;">Aparência</h3>
+      <div class="seg-tema">
+        ${[['claro','Claro'],['escuro','Escuro'],['auto','Automático']].map(([k,l]) => `<button type="button" data-tema="${k}" class="${TEMA.pref===k?'active':''}">${l}</button>`).join('')}
+      </div>
+    </div>
     <div class="card" id="card-som">
       <h3 style="display:flex;align-items:center;gap:8px;">Som de confirmação</h3>
       <label class="linha-som"><input type="checkbox" id="chk-som" ${SOM.ligado ? 'checked' : ''} /> <span>Tocar som ao lançar</span></label>
@@ -1404,7 +1441,7 @@ function viewUsuarios() {
   return `
   <div class="topbar"><div class="titles">${brandIcon()}<h1>Usuários</h1></div></div>
   <div class="content">
-    ${lista.length === 0 ? emptyState('🔑', 'Nenhum usuário cadastrado ainda') : lista.map(cardUsuario).join('')}
+    ${lista.length === 0 ? emptyState(ICON('key-round', 44), 'Nenhum usuário cadastrado ainda') : lista.map(cardUsuario).join('')}
   </div>
   <button class="fab" id="fab-novo-usuario">+</button>
   ${popupUsuario()}
@@ -1925,6 +1962,18 @@ async function registrarLancamentoInterno() {
 }
 
 
+
+/* ---------------- TEMA (claro / escuro / automático) ---------------- */
+const TEMA = {
+  get pref() { try { return localStorage.getItem('if_tema') || 'auto'; } catch (e) { return 'auto'; } },
+  set pref(v) { try { localStorage.setItem('if_tema', v); } catch (e) {} },
+  efetivo() { return this.pref === 'auto' ? (window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches ? 'escuro' : 'claro') : this.pref; },
+  aplicar() { document.documentElement.setAttribute('data-tema', this.efetivo());
+    const m = document.querySelector('meta[name="theme-color"]'); if (m) m.setAttribute('content', this.efetivo() === 'escuro' ? '#0A101D' : '#DEE9FF'); },
+};
+TEMA.aplicar();
+if (window.matchMedia) { try { matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => TEMA.aplicar()); } catch (e) {} }
+
 /* ---------------- SOM E CONFIRMAÇÃO ---------------- */
 
 const SOM = {
@@ -2163,7 +2212,7 @@ function criarMarcaDagua() {
   if (document.getElementById('wm-bg')) return;
   const wm = document.createElement('div');
   wm.id = 'wm-bg'; wm.className = 'wm-bg'; wm.setAttribute('aria-hidden', 'true');
-  wm.innerHTML = '<img src="assets/brand/marca-dagua-f-azul.png" class="wm1" alt=""><img src="assets/brand/marca-dagua-f-azul.png" class="wm2" alt="">';
+  wm.innerHTML = '<img src="assets/brand/marca-dagua-f.png" class="wm1" alt=""><img src="assets/brand/marca-dagua-f.png" class="wm2" alt="">';
   document.body.insertBefore(wm, document.body.firstChild);
 }
 
